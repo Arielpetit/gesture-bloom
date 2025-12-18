@@ -1,30 +1,71 @@
-import { useState } from 'react';
-import { PatternType, ParticleColor } from '@/types/particle';
+import { useState, useEffect, useRef } from 'react';
+import { PatternType, ParticleColor, GestureType } from '@/types/particle';
 import { DEFAULT_CONFIG, PARTICLE_COLORS } from '@/constants/patterns';
 import { useHandTracking } from '@/hooks/useHandTracking';
 import { ParticleScene } from '@/components/ParticleScene';
 import { ControlPanel } from '@/components/ControlPanel';
 
+// Map gestures to patterns
+const GESTURE_PATTERN_MAP: Partial<Record<GestureType, PatternType>> = {
+  peace: 'heart',
+  thumbsUp: 'love',
+  rock: 'galaxy',
+  pointing: 'helix',
+};
+
 const Index = () => {
   const [selectedPattern, setSelectedPattern] = useState<PatternType>(DEFAULT_CONFIG.pattern);
   const [selectedColor, setSelectedColor] = useState<ParticleColor>(PARTICLE_COLORS[0]);
+  const [manualPattern, setManualPattern] = useState<PatternType | null>(null);
   
   const { gestureState, isLoading, error } = useHandTracking();
+  const lastGestureRef = useRef<GestureType>('none');
+  const gestureHoldTimeRef = useRef<number>(0);
+
+  // Handle gesture-based pattern switching
+  useEffect(() => {
+    const gesture = gestureState.gesture;
+    
+    // Require gesture to be held for a short time to avoid flickering
+    if (gesture === lastGestureRef.current) {
+      gestureHoldTimeRef.current += 1;
+    } else {
+      gestureHoldTimeRef.current = 0;
+      lastGestureRef.current = gesture;
+    }
+
+    // Only switch if gesture is held for ~10 frames
+    if (gestureHoldTimeRef.current > 10) {
+      const mappedPattern = GESTURE_PATTERN_MAP[gesture];
+      if (mappedPattern && manualPattern === null) {
+        setSelectedPattern(mappedPattern);
+      } else if (gesture === 'none' || gesture === 'open' || gesture === 'fist') {
+        // Return to manual selection if no special gesture
+        if (manualPattern) {
+          setSelectedPattern(manualPattern);
+        }
+      }
+    }
+  }, [gestureState.gesture, manualPattern]);
+
+  // Handle manual pattern selection
+  const handlePatternChange = (pattern: PatternType) => {
+    setManualPattern(pattern);
+    setSelectedPattern(pattern);
+  };
 
   return (
     <div className="relative w-full h-screen overflow-hidden">
-      {/* 3D Particle Scene */}
       <ParticleScene
         pattern={selectedPattern}
         color={selectedColor}
         gestureState={gestureState}
-        particleCount={5000}
+        particleCount={8000}
       />
 
-      {/* UI Controls */}
       <ControlPanel
         selectedPattern={selectedPattern}
-        onPatternChange={setSelectedPattern}
+        onPatternChange={handlePatternChange}
         selectedColor={selectedColor}
         onColorChange={setSelectedColor}
         gestureState={gestureState}

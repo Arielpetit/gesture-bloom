@@ -92,23 +92,31 @@ export function ControlPanel({
           className="glass-panel p-4 animate-fade-in" 
           style={{ animationDelay: '0.2s' }}
         >
-          <h3 className="floating-label mb-3">How to Use</h3>
+          <h3 className="floating-label mb-3">Gesture Controls</h3>
           <ul className="text-sm text-muted-foreground space-y-2">
             <li className="flex items-start gap-2">
               <span className="text-primary">✋</span>
-              <span>Open your hand to <span className="text-foreground">expand</span> particles</span>
+              <span>Open hand to <span className="text-foreground">expand</span></span>
             </li>
             <li className="flex items-start gap-2">
               <span className="text-primary">✊</span>
-              <span>Close your fist to <span className="text-foreground">contract</span> particles</span>
+              <span>Fist to <span className="text-foreground">contract</span></span>
             </li>
             <li className="flex items-start gap-2">
-              <span className="text-primary">◉</span>
-              <span>Select different <span className="text-foreground">patterns</span> above</span>
+              <span className="text-primary">✌️</span>
+              <span>Peace sign → <span className="text-foreground">Heart shape</span></span>
             </li>
             <li className="flex items-start gap-2">
-              <span className="text-primary">🎨</span>
-              <span>Choose a <span className="text-foreground">color theme</span> for particles</span>
+              <span className="text-primary">👍</span>
+              <span>Thumbs up → <span className="text-foreground">I ♥ U message</span></span>
+            </li>
+            <li className="flex items-start gap-2">
+              <span className="text-primary">☝️</span>
+              <span>Point → <span className="text-foreground">Helix</span></span>
+            </li>
+            <li className="flex items-start gap-2">
+              <span className="text-primary">🤘</span>
+              <span>Rock sign → <span className="text-foreground">Galaxy</span></span>
             </li>
           </ul>
         </div>

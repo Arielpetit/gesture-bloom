@@ -1,13 +1,14 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Hands, Results } from '@mediapipe/hands';
 import { Camera } from '@mediapipe/camera_utils';
-import { HandGestureState } from '@/types/particle';
+import { HandGestureState, GestureType } from '@/types/particle';
 
 export function useHandTracking() {
   const [gestureState, setGestureState] = useState<HandGestureState>({
     isDetected: false,
     openness: 0.5,
     position: null,
+    gesture: 'none',
   });
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -16,26 +17,88 @@ export function useHandTracking() {
   const handsRef = useRef<Hands | null>(null);
   const cameraRef = useRef<Camera | null>(null);
 
+  const isFingerExtended = useCallback((landmarks: any[], fingerTip: number, fingerPip: number, fingerMcp: number) => {
+    const tip = landmarks[fingerTip];
+    const pip = landmarks[fingerPip];
+    const mcp = landmarks[fingerMcp];
+    
+    // For vertical fingers, check Y position
+    const tipToPip = Math.sqrt(
+      Math.pow(tip.x - pip.x, 2) + Math.pow(tip.y - pip.y, 2) + Math.pow(tip.z - pip.z, 2)
+    );
+    const pipToMcp = Math.sqrt(
+      Math.pow(pip.x - mcp.x, 2) + Math.pow(pip.y - mcp.y, 2) + Math.pow(pip.z - mcp.z, 2)
+    );
+    
+    // Finger is extended if tip is above pip (lower Y) and distance is significant
+    return tip.y < pip.y && tipToPip > pipToMcp * 0.5;
+  }, []);
+
+  const isThumbExtended = useCallback((landmarks: any[]) => {
+    const thumbTip = landmarks[4];
+    const thumbIp = landmarks[3];
+    const thumbMcp = landmarks[2];
+    const indexMcp = landmarks[5];
+    
+    // Thumb is extended if it's away from the palm (index mcp)
+    const thumbToIndex = Math.sqrt(
+      Math.pow(thumbTip.x - indexMcp.x, 2) + Math.pow(thumbTip.z - indexMcp.z, 2)
+    );
+    
+    return thumbToIndex > 0.1;
+  }, []);
+
+  const detectGesture = useCallback((landmarks: any[]): GestureType => {
+    const thumb = isThumbExtended(landmarks);
+    const index = isFingerExtended(landmarks, 8, 6, 5);
+    const middle = isFingerExtended(landmarks, 12, 10, 9);
+    const ring = isFingerExtended(landmarks, 16, 14, 13);
+    const pinky = isFingerExtended(landmarks, 20, 18, 17);
+    
+    const extendedCount = [thumb, index, middle, ring, pinky].filter(Boolean).length;
+
+    // Peace sign: index and middle extended, others closed
+    if (index && middle && !ring && !pinky) {
+      return 'peace';
+    }
+    
+    // Thumbs up: only thumb extended
+    if (thumb && !index && !middle && !ring && !pinky) {
+      return 'thumbsUp';
+    }
+    
+    // Pointing: only index extended
+    if (index && !middle && !ring && !pinky) {
+      return 'pointing';
+    }
+    
+    // Rock gesture: index and pinky extended
+    if (index && pinky && !middle && !ring) {
+      return 'rock';
+    }
+    
+    // Open hand: most fingers extended
+    if (extendedCount >= 4) {
+      return 'open';
+    }
+    
+    // Fist: no fingers extended
+    if (extendedCount <= 1) {
+      return 'fist';
+    }
+    
+    return 'none';
+  }, [isFingerExtended, isThumbExtended]);
+
   const calculateHandOpenness = useCallback((landmarks: any[]) => {
-    // Calculate distance between fingertips and palm center
-    const palmCenter = landmarks[0]; // Wrist
+    const palmCenter = landmarks[0];
     const fingerTips = [
-      landmarks[4],  // Thumb tip
-      landmarks[8],  // Index tip
-      landmarks[12], // Middle tip
-      landmarks[16], // Ring tip
-      landmarks[20], // Pinky tip
+      landmarks[4], landmarks[8], landmarks[12], landmarks[16], landmarks[20],
     ];
-
     const fingerBases = [
-      landmarks[2],  // Thumb base
-      landmarks[5],  // Index base
-      landmarks[9],  // Middle base
-      landmarks[13], // Ring base
-      landmarks[17], // Pinky base
+      landmarks[2], landmarks[5], landmarks[9], landmarks[13], landmarks[17],
     ];
 
-    // Calculate average extension ratio
     let totalExtension = 0;
     for (let i = 0; i < 5; i++) {
       const tipToPalm = Math.sqrt(
@@ -51,52 +114,46 @@ export function useHandTracking() {
       totalExtension += tipToPalm / (baseToPalm + 0.001);
     }
 
-    // Normalize to 0-1 range
     const avgExtension = totalExtension / 5;
-    const openness = Math.min(1, Math.max(0, (avgExtension - 1.2) / 1.5));
-    
-    return openness;
+    return Math.min(1, Math.max(0, (avgExtension - 1.2) / 1.5));
   }, []);
 
   const onResults = useCallback((results: Results) => {
     if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
       const landmarks = results.multiHandLandmarks[0];
       const openness = calculateHandOpenness(landmarks);
-      
-      // Get palm center for position
-      const palmCenter = landmarks[9]; // Middle finger base
+      const gesture = detectGesture(landmarks);
+      const palmCenter = landmarks[9];
       
       setGestureState({
         isDetected: true,
         openness,
         position: { x: palmCenter.x, y: palmCenter.y },
+        gesture,
       });
     } else {
       setGestureState(prev => ({
         ...prev,
         isDetected: false,
         position: null,
+        gesture: 'none',
       }));
     }
-  }, [calculateHandOpenness]);
+  }, [calculateHandOpenness, detectGesture]);
 
   const initializeHandTracking = useCallback(async () => {
     try {
       setIsLoading(true);
       setError(null);
 
-      // Create video element
       const video = document.createElement('video');
       video.setAttribute('playsinline', '');
       video.style.display = 'none';
       document.body.appendChild(video);
       videoRef.current = video;
 
-      // Initialize MediaPipe Hands
       const hands = new Hands({
-        locateFile: (file) => {
-          return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
-        },
+        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
       });
 
       hands.setOptions({
@@ -109,7 +166,6 @@ export function useHandTracking() {
       hands.onResults(onResults);
       handsRef.current = hands;
 
-      // Initialize camera
       const camera = new Camera(video, {
         onFrame: async () => {
           if (handsRef.current && videoRef.current) {
@@ -131,15 +187,9 @@ export function useHandTracking() {
   }, [onResults]);
 
   const cleanup = useCallback(() => {
-    if (cameraRef.current) {
-      cameraRef.current.stop();
-    }
-    if (handsRef.current) {
-      handsRef.current.close();
-    }
-    if (videoRef.current) {
-      videoRef.current.remove();
-    }
+    if (cameraRef.current) cameraRef.current.stop();
+    if (handsRef.current) handsRef.current.close();
+    if (videoRef.current) videoRef.current.remove();
   }, []);
 
   useEffect(() => {
@@ -147,10 +197,5 @@ export function useHandTracking() {
     return cleanup;
   }, [initializeHandTracking, cleanup]);
 
-  return {
-    gestureState,
-    isLoading,
-    error,
-    restart: initializeHandTracking,
-  };
+  return { gestureState, isLoading, error, restart: initializeHandTracking };
 }
