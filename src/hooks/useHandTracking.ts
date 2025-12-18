@@ -8,7 +8,7 @@ type Hands = mpHands.Hands;
 type Results = mpHands.Results;
 import { HandGestureState, GestureType } from '@/types/particle';
 
-export function useHandTracking() {
+export function useHandTracking(isMobile: boolean = false) {
   const [gestureState, setGestureState] = useState<HandGestureState>({
     isDetected: false,
     openness: 0.5,
@@ -22,6 +22,7 @@ export function useHandTracking() {
   const handsRef = useRef<Hands | null>(null);
   const cameraRef = useRef<Camera | null>(null);
   const isInitializingRef = useRef(false);
+  const frameCounterRef = useRef(0);
 
   // Check if finger is extended by comparing tip to PIP joint distance from wrist
   const isFingerExtended = useCallback((landmarks: any[], tipIdx: number, pipIdx: number, mcpIdx: number) => {
@@ -231,7 +232,7 @@ export function useHandTracking() {
         HandsConstructor = HandsConstructor.Hands;
       }
 
-      console.log('HandsConstructor type:', typeof HandsConstructor);
+      console.log('HandsConstructor type:', typeof HandsConstructor, 'isMobile:', isMobile);
 
       if (typeof HandsConstructor !== 'function') {
         throw new Error('Hands constructor not found');
@@ -243,7 +244,7 @@ export function useHandTracking() {
 
       hands.setOptions({
         maxNumHands: 1,
-        modelComplexity: 1,
+        modelComplexity: isMobile ? 0 : 1, // 0 is faster for mobile
         minDetectionConfidence: 0.7,
         minTrackingConfidence: 0.5,
       });
@@ -267,12 +268,17 @@ export function useHandTracking() {
       const camera = new CameraConstructor(video, {
         onFrame: async () => {
           if (handsRef.current && videoRef.current) {
+            // Mobile optimization: process every 2nd frame to save CPU
+            if (isMobile) {
+              frameCounterRef.current++;
+              if (frameCounterRef.current % 2 !== 0) return;
+            }
             await handsRef.current.send({ image: videoRef.current });
           }
         },
-        // Use ideal constraints for better compatibility
-        width: { ideal: 640 },
-        height: { ideal: 480 },
+        // Lower resolution for mobile to improve performance
+        width: { ideal: isMobile ? 320 : 640 },
+        height: { ideal: isMobile ? 240 : 480 },
       });
 
       cameraRef.current = camera;
@@ -299,7 +305,7 @@ export function useHandTracking() {
     } finally {
       isInitializingRef.current = false;
     }
-  }, [onResults, cleanup]);
+  }, [onResults, cleanup, isMobile]);
 
   useEffect(() => {
     initializeHandTracking();

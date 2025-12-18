@@ -8,6 +8,7 @@ interface ParticleSceneProps {
   color: ParticleColor;
   gestureState: HandGestureState;
   particleCount?: number;
+  isMobile?: boolean;
   onRotationChange?: (rotation: { x: number; y: number }, isGrabbing: boolean) => void;
 }
 
@@ -16,6 +17,7 @@ export function ParticleScene({
   color,
   gestureState,
   particleCount = 8000,
+  isMobile = false,
   onRotationChange,
 }: ParticleSceneProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -109,29 +111,30 @@ export function ParticleScene({
     cameraRef.current = camera;
 
     const renderer = new THREE.WebGLRenderer({
-      antialias: true,
+      antialias: !isMobile, // Disable antialias on mobile for performance
       alpha: true,
       powerPreference: 'high-performance',
     });
     renderer.setSize(width, height);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setPixelRatio(isMobile ? 1 : Math.min(window.devicePixelRatio, 2));
     container.appendChild(renderer.domElement);
     rendererRef.current = renderer;
 
-    const positions = generatePattern(pattern, particleCount);
+    const effectiveParticleCount = isMobile ? Math.min(particleCount, 4000) : particleCount;
+    const positions = generatePattern(pattern, effectiveParticleCount);
     basePositionsRef.current = positions.slice();
     currentPositionsRef.current = positions.slice();
     targetPositionsRef.current = positions.slice();
-    velocitiesRef.current = new Float32Array(particleCount * 3);
+    velocitiesRef.current = new Float32Array(effectiveParticleCount * 3);
 
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
 
     // Add color variation and glint offsets for realism
-    const colors = new Float32Array(particleCount * 3);
-    const glints = new Float32Array(particleCount);
+    const colors = new Float32Array(effectiveParticleCount * 3);
+    const glints = new Float32Array(effectiveParticleCount);
     const baseColor = new THREE.Color(color.color);
-    for (let i = 0; i < particleCount; i++) {
+    for (let i = 0; i < effectiveParticleCount; i++) {
       const variation = Math.random() * 0.4 - 0.2;
       colors[i * 3] = Math.max(0, Math.min(1, baseColor.r + variation));
       colors[i * 3 + 1] = Math.max(0, Math.min(1, baseColor.g + variation));
