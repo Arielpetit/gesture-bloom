@@ -156,6 +156,11 @@ export function useHandTracking(isMobile: boolean = false) {
     if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
       const landmarks = results.multiHandLandmarks[0];
 
+      // Debug log for mobile detection verification
+      if (isMobile) {
+        console.log('Mobile Hand Detected!', { gesture: detectGesture(landmarks) });
+      }
+
       setGestureState({
         isDetected: true,
         openness: calculateHandOpenness(landmarks),
@@ -171,7 +176,7 @@ export function useHandTracking(isMobile: boolean = false) {
         gesture: 'none',
       }));
     }
-  }, [calculateHandOpenness, detectGesture]);
+  }, [calculateHandOpenness, detectGesture, isMobile]);
 
   const cleanup = useCallback(() => {
     console.log('Cleaning up hand tracking...');
@@ -221,7 +226,14 @@ export function useHandTracking(isMobile: boolean = false) {
       video.setAttribute('playsinline', '');
       video.setAttribute('autoplay', '');
       video.setAttribute('muted', '');
-      video.style.display = 'none';
+      // Use opacity: 0 instead of display: none to prevent mobile browsers from pausing the video
+      video.style.position = 'absolute';
+      video.style.top = '0';
+      video.style.left = '0';
+      video.style.width = '1px';
+      video.style.height = '1px';
+      video.style.opacity = '0';
+      video.style.pointerEvents = 'none';
       document.body.appendChild(video);
       videoRef.current = video;
 
@@ -244,7 +256,7 @@ export function useHandTracking(isMobile: boolean = false) {
 
       hands.setOptions({
         maxNumHands: 1,
-        modelComplexity: isMobile ? 0 : 1, // 0 is faster for mobile
+        modelComplexity: 1, // Revert to 1 for better accuracy on mobile
         minDetectionConfidence: 0.7,
         minTrackingConfidence: 0.5,
       });
@@ -276,6 +288,8 @@ export function useHandTracking(isMobile: boolean = false) {
             await handsRef.current.send({ image: videoRef.current });
           }
         },
+        // Explicitly set facingMode for mobile
+        facingMode: 'user',
         // Lower resolution for mobile to improve performance
         width: { ideal: isMobile ? 320 : 640 },
         height: { ideal: isMobile ? 240 : 480 },
