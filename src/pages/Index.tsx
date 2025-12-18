@@ -18,7 +18,7 @@ const Index = () => {
         pattern={selectedPattern}
         color={selectedColor}
         gestureState={gestureState}
-        particleCount={10000}
+        particleCount={5000}
       />
 
       {/* UI Controls */}
