@@ -8,7 +8,7 @@ type Hands = mpHands.Hands;
 type Results = mpHands.Results;
 import { HandGestureState, GestureType } from '@/types/particle';
 
-export function useHandTracking(isMobile: boolean = false) {
+export function useHandTracking() {
   const [gestureState, setGestureState] = useState<HandGestureState>({
     isDetected: false,
     openness: 0.5,
@@ -22,7 +22,6 @@ export function useHandTracking(isMobile: boolean = false) {
   const handsRef = useRef<Hands | null>(null);
   const cameraRef = useRef<Camera | null>(null);
   const isInitializingRef = useRef(false);
-  const frameCounterRef = useRef(0);
 
   // Check if finger is extended by comparing tip to PIP joint distance from wrist
   const isFingerExtended = useCallback((landmarks: any[], tipIdx: number, pipIdx: number, mcpIdx: number) => {
@@ -156,11 +155,6 @@ export function useHandTracking(isMobile: boolean = false) {
     if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
       const landmarks = results.multiHandLandmarks[0];
 
-      // Debug log for mobile detection verification
-      if (isMobile) {
-        console.log('Mobile Hand Detected!', { gesture: detectGesture(landmarks) });
-      }
-
       setGestureState({
         isDetected: true,
         openness: calculateHandOpenness(landmarks),
@@ -176,7 +170,7 @@ export function useHandTracking(isMobile: boolean = false) {
         gesture: 'none',
       }));
     }
-  }, [calculateHandOpenness, detectGesture, isMobile]);
+  }, [calculateHandOpenness, detectGesture]);
 
   const cleanup = useCallback(() => {
     console.log('Cleaning up hand tracking...');
@@ -226,14 +220,7 @@ export function useHandTracking(isMobile: boolean = false) {
       video.setAttribute('playsinline', '');
       video.setAttribute('autoplay', '');
       video.setAttribute('muted', '');
-      // Use opacity: 0 instead of display: none to prevent mobile browsers from pausing the video
-      video.style.position = 'absolute';
-      video.style.top = '0';
-      video.style.left = '0';
-      video.style.width = '1px';
-      video.style.height = '1px';
-      video.style.opacity = '0';
-      video.style.pointerEvents = 'none';
+      video.style.display = 'none';
       document.body.appendChild(video);
       videoRef.current = video;
 
@@ -244,7 +231,7 @@ export function useHandTracking(isMobile: boolean = false) {
         HandsConstructor = HandsConstructor.Hands;
       }
 
-      console.log('HandsConstructor type:', typeof HandsConstructor, 'isMobile:', isMobile);
+      console.log('HandsConstructor type:', typeof HandsConstructor);
 
       if (typeof HandsConstructor !== 'function') {
         throw new Error('Hands constructor not found');
@@ -256,7 +243,7 @@ export function useHandTracking(isMobile: boolean = false) {
 
       hands.setOptions({
         maxNumHands: 1,
-        modelComplexity: 1, // Revert to 1 for better accuracy on mobile
+        modelComplexity: 1,
         minDetectionConfidence: 0.7,
         minTrackingConfidence: 0.5,
       });
@@ -280,19 +267,12 @@ export function useHandTracking(isMobile: boolean = false) {
       const camera = new CameraConstructor(video, {
         onFrame: async () => {
           if (handsRef.current && videoRef.current) {
-            // Mobile optimization: process every 2nd frame to save CPU
-            if (isMobile) {
-              frameCounterRef.current++;
-              if (frameCounterRef.current % 2 !== 0) return;
-            }
             await handsRef.current.send({ image: videoRef.current });
           }
         },
-        // Explicitly set facingMode for mobile
-        facingMode: 'user',
-        // Lower resolution for mobile to improve performance
-        width: { ideal: isMobile ? 320 : 640 },
-        height: { ideal: isMobile ? 240 : 480 },
+        // Use ideal constraints for better compatibility
+        width: { ideal: 640 },
+        height: { ideal: 480 },
       });
 
       cameraRef.current = camera;
@@ -319,7 +299,7 @@ export function useHandTracking(isMobile: boolean = false) {
     } finally {
       isInitializingRef.current = false;
     }
-  }, [onResults, cleanup, isMobile]);
+  }, [onResults, cleanup]);
 
   useEffect(() => {
     initializeHandTracking();

@@ -16,7 +16,6 @@ const GESTURE_PATTERN_MAP: Partial<Record<GestureType, PatternType>> = {
 };
 
 const Index = () => {
-    const [isMobile, setIsMobile] = useState(false);
     const [selectedPattern, setSelectedPattern] = useState<PatternType>(DEFAULT_CONFIG.pattern);
     const [selectedColor, setSelectedColor] = useState<ParticleColor>(PARTICLE_COLORS[0]);
     const [manualPattern, setManualPattern] = useState<PatternType | null>(null);
@@ -26,18 +25,8 @@ const Index = () => {
     const [isGrabbing, setIsGrabbing] = useState(false);
     const [showPortrait, setShowPortrait] = useState(false);
 
-    const { gestureState, isLoading, error } = useHandTracking(isMobile);
+    const { gestureState, isLoading, error } = useHandTracking();
     const gestureBufferRef = useRef<GestureType[]>([]);
-
-    // Mobile detection
-    useEffect(() => {
-        const checkMobile = () => {
-            setIsMobile(window.innerWidth < 768);
-        };
-        checkMobile();
-        window.addEventListener('resize', checkMobile);
-        return () => window.removeEventListener('resize', checkMobile);
-    }, []);
 
     // Handle gesture-based pattern switching with smoothing and sticky reset
     useEffect(() => {
@@ -105,7 +94,6 @@ const Index = () => {
                 color={selectedColor}
                 gestureState={gestureState}
                 particleCount={8000}
-                isMobile={isMobile}
                 onRotationChange={(rot, grabbing) => {
                     setRotation(rot);
                     setIsGrabbing(grabbing);
