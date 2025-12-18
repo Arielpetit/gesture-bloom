@@ -21,6 +21,7 @@ export function useHandTracking() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const handsRef = useRef<Hands | null>(null);
   const cameraRef = useRef<Camera | null>(null);
+  const isInitializingRef = useRef(false);
 
   // Check if finger is extended by comparing tip to PIP joint distance from wrist
   const isFingerExtended = useCallback((landmarks: any[], tipIdx: number, pipIdx: number, mcpIdx: number) => {
@@ -171,10 +172,49 @@ export function useHandTracking() {
     }
   }, [calculateHandOpenness, detectGesture]);
 
+  const cleanup = useCallback(() => {
+    console.log('Cleaning up hand tracking...');
+    if (cameraRef.current) {
+      try {
+        cameraRef.current.stop();
+      } catch (e) {
+        console.error('Error stopping camera:', e);
+      }
+      cameraRef.current = null;
+    }
+    if (handsRef.current) {
+      try {
+        handsRef.current.close();
+      } catch (e) {
+        console.error('Error closing hands:', e);
+      }
+      handsRef.current = null;
+    }
+    if (videoRef.current) {
+      try {
+        videoRef.current.pause();
+        videoRef.current.srcObject = null;
+        videoRef.current.remove();
+      } catch (e) {
+        console.error('Error removing video element:', e);
+      }
+      videoRef.current = null;
+    }
+  }, []);
+
   const initializeHandTracking = useCallback(async () => {
+    if (isInitializingRef.current) {
+      console.log('Already initializing, skipping...');
+      return;
+    }
+
     try {
+      isInitializingRef.current = true;
       setIsLoading(true);
       setError(null);
+
+      // Ensure cleanup of any existing resources
+      cleanup();
 
       const video = document.createElement('video');
       video.setAttribute('playsinline', '');
@@ -185,7 +225,6 @@ export function useHandTracking() {
       videoRef.current = video;
 
       // Use global MediaPipe objects if available (from CDN in index.html)
-      // This is much more reliable in production builds
       let HandsConstructor = (window as any).Hands || (mpHands as any).Hands || (mpHands as any).default?.Hands || (mpHands as any).default;
 
       if (typeof HandsConstructor !== 'function' && HandsConstructor?.Hands) {
@@ -231,49 +270,36 @@ export function useHandTracking() {
             await handsRef.current.send({ image: videoRef.current });
           }
         },
-        width: 640,
-        height: 480,
+        // Use ideal constraints for better compatibility
+        width: { ideal: 640 },
+        height: { ideal: 480 },
       });
 
       cameraRef.current = camera;
 
       // Small delay to ensure previous camera instances are fully released
-      await new Promise(resolve => setTimeout(resolve, 500));
+      await new Promise(resolve => setTimeout(resolve, 800));
       await camera.start();
 
       setIsLoading(false);
     } catch (err) {
       console.error('Hand tracking initialization error:', err);
-      setError(err instanceof Error ? err.message : 'Failed to initialize camera. Please allow camera access.');
+      let message = 'Failed to initialize camera.';
+      if (err instanceof Error) {
+        if (err.name === 'NotReadableError' || err.message.includes('NotReadableError')) {
+          message = 'Camera is already in use by another application.';
+        } else if (err.name === 'NotAllowedError' || err.message.includes('NotAllowedError')) {
+          message = 'Camera access denied. Please allow camera access.';
+        } else {
+          message = err.message;
+        }
+      }
+      setError(message);
       setIsLoading(false);
+    } finally {
+      isInitializingRef.current = false;
     }
-  }, [onResults]);
-
-  const cleanup = useCallback(() => {
-    console.log('Cleaning up hand tracking...');
-    if (cameraRef.current) {
-      try {
-        cameraRef.current.stop();
-      } catch (e) {
-        console.error('Error stopping camera:', e);
-      }
-      cameraRef.current = null;
-    }
-    if (handsRef.current) {
-      try {
-        handsRef.current.close();
-      } catch (e) {
-        console.error('Error closing hands:', e);
-      }
-      handsRef.current = null;
-    }
-    if (videoRef.current) {
-      videoRef.current.pause();
-      videoRef.current.srcObject = null;
-      videoRef.current.remove();
-      videoRef.current = null;
-    }
-  }, []);
+  }, [onResults, cleanup]);
 
   useEffect(() => {
     initializeHandTracking();
