@@ -1,6 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Hands, Results } from '@mediapipe/hands';
+import * as mpHands from '@mediapipe/hands';
 import { Camera } from '@mediapipe/camera_utils';
+
+// Handle MediaPipe's weird bundling in production
+const Hands = (mpHands as any).Hands || mpHands;
+type Hands = mpHands.Hands;
+type Results = mpHands.Results;
 import { HandGestureState, GestureType } from '@/types/particle';
 
 export function useHandTracking() {
@@ -177,7 +182,17 @@ export function useHandTracking() {
       document.body.appendChild(video);
       videoRef.current = video;
 
-      const hands = new Hands({
+      // Use global MediaPipe objects if available (from CDN in index.html)
+      // This is much more reliable in production builds
+      let HandsConstructor = (window as any).Hands || (mpHands as any).Hands || (mpHands as any).default?.Hands || (mpHands as any).default;
+
+      if (typeof HandsConstructor !== 'function' && HandsConstructor?.Hands) {
+        HandsConstructor = HandsConstructor.Hands;
+      }
+
+      console.log('HandsConstructor type:', typeof HandsConstructor);
+
+      const hands = new HandsConstructor({
         locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
       });
 
@@ -191,7 +206,9 @@ export function useHandTracking() {
       hands.onResults(onResults);
       handsRef.current = hands;
 
-      const camera = new Camera(video, {
+      // Use global Camera constructor from CDN
+      const CameraConstructor = (window as any).Camera || Camera;
+      const camera = new CameraConstructor(video, {
         onFrame: async () => {
           if (handsRef.current && videoRef.current) {
             await handsRef.current.send({ image: videoRef.current });
