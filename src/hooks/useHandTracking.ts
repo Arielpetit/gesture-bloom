@@ -17,73 +17,88 @@ export function useHandTracking() {
   const handsRef = useRef<Hands | null>(null);
   const cameraRef = useRef<Camera | null>(null);
 
-  const isFingerExtended = useCallback((landmarks: any[], fingerTip: number, fingerPip: number, fingerMcp: number) => {
-    const tip = landmarks[fingerTip];
-    const pip = landmarks[fingerPip];
-    const mcp = landmarks[fingerMcp];
+  // Check if finger is extended by comparing tip to PIP joint distance from wrist
+  const isFingerExtended = useCallback((landmarks: any[], tipIdx: number, pipIdx: number, mcpIdx: number) => {
+    const wrist = landmarks[0];
+    const tip = landmarks[tipIdx];
+    const pip = landmarks[pipIdx];
+    const mcp = landmarks[mcpIdx];
     
-    // For vertical fingers, check Y position
-    const tipToPip = Math.sqrt(
-      Math.pow(tip.x - pip.x, 2) + Math.pow(tip.y - pip.y, 2) + Math.pow(tip.z - pip.z, 2)
-    );
-    const pipToMcp = Math.sqrt(
-      Math.pow(pip.x - mcp.x, 2) + Math.pow(pip.y - mcp.y, 2) + Math.pow(pip.z - mcp.z, 2)
+    // Distance from tip to wrist
+    const tipToWrist = Math.sqrt(
+      Math.pow(tip.x - wrist.x, 2) + 
+      Math.pow(tip.y - wrist.y, 2) + 
+      Math.pow(tip.z - wrist.z, 2)
     );
     
-    // Finger is extended if tip is above pip (lower Y) and distance is significant
-    return tip.y < pip.y && tipToPip > pipToMcp * 0.5;
+    // Distance from pip to wrist
+    const pipToWrist = Math.sqrt(
+      Math.pow(pip.x - wrist.x, 2) + 
+      Math.pow(pip.y - wrist.y, 2) + 
+      Math.pow(pip.z - wrist.z, 2)
+    );
+    
+    // Finger is extended if tip is further from wrist than pip
+    return tipToWrist > pipToWrist * 1.1;
   }, []);
 
+  // Thumb extension is different - check horizontal spread
   const isThumbExtended = useCallback((landmarks: any[]) => {
     const thumbTip = landmarks[4];
     const thumbIp = landmarks[3];
-    const thumbMcp = landmarks[2];
     const indexMcp = landmarks[5];
+    const wrist = landmarks[0];
     
-    // Thumb is extended if it's away from the palm (index mcp)
-    const thumbToIndex = Math.sqrt(
-      Math.pow(thumbTip.x - indexMcp.x, 2) + Math.pow(thumbTip.z - indexMcp.z, 2)
-    );
+    // Check if thumb tip is far from index finger base (spread out)
+    const thumbToIndex = Math.abs(thumbTip.x - indexMcp.x);
+    const palmWidth = Math.abs(landmarks[5].x - landmarks[17].x); // index mcp to pinky mcp
     
-    return thumbToIndex > 0.1;
+    return thumbToIndex > palmWidth * 0.5;
   }, []);
 
   const detectGesture = useCallback((landmarks: any[]): GestureType => {
+    // Check each finger
     const thumb = isThumbExtended(landmarks);
     const index = isFingerExtended(landmarks, 8, 6, 5);
     const middle = isFingerExtended(landmarks, 12, 10, 9);
     const ring = isFingerExtended(landmarks, 16, 14, 13);
     const pinky = isFingerExtended(landmarks, 20, 18, 17);
     
-    const extendedCount = [thumb, index, middle, ring, pinky].filter(Boolean).length;
+    const extendedCount = [index, middle, ring, pinky].filter(Boolean).length;
+    
+    console.log('Gesture Debug:', { thumb, index, middle, ring, pinky, extendedCount });
 
-    // Peace sign: index and middle extended, others closed
+    // Peace sign: ONLY index and middle extended
     if (index && middle && !ring && !pinky) {
+      console.log('Detected: PEACE');
       return 'peace';
     }
     
-    // Thumbs up: only thumb extended
+    // Thumbs up: thumb extended, all fingers closed
     if (thumb && !index && !middle && !ring && !pinky) {
+      console.log('Detected: THUMBS UP');
       return 'thumbsUp';
     }
     
     // Pointing: only index extended
     if (index && !middle && !ring && !pinky) {
+      console.log('Detected: POINTING');
       return 'pointing';
     }
     
-    // Rock gesture: index and pinky extended
-    if (index && pinky && !middle && !ring) {
+    // Rock gesture: index and pinky extended, middle and ring closed
+    if (index && !middle && !ring && pinky) {
+      console.log('Detected: ROCK');
       return 'rock';
     }
     
-    // Open hand: most fingers extended
-    if (extendedCount >= 4) {
+    // Open hand: 4+ fingers extended
+    if (extendedCount >= 3) {
       return 'open';
     }
     
-    // Fist: no fingers extended
-    if (extendedCount <= 1) {
+    // Fist: all fingers closed
+    if (extendedCount <= 1 && !thumb) {
       return 'fist';
     }
     

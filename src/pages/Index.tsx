@@ -17,40 +17,47 @@ const Index = () => {
   const [selectedPattern, setSelectedPattern] = useState<PatternType>(DEFAULT_CONFIG.pattern);
   const [selectedColor, setSelectedColor] = useState<ParticleColor>(PARTICLE_COLORS[0]);
   const [manualPattern, setManualPattern] = useState<PatternType | null>(null);
+  const [gestureTriggeredPattern, setGestureTriggeredPattern] = useState<PatternType | null>(null);
   
   const { gestureState, isLoading, error } = useHandTracking();
   const lastGestureRef = useRef<GestureType>('none');
-  const gestureHoldTimeRef = useRef<number>(0);
+  const gestureHoldCountRef = useRef<number>(0);
 
   // Handle gesture-based pattern switching
   useEffect(() => {
     const gesture = gestureState.gesture;
     
-    // Require gesture to be held for a short time to avoid flickering
+    // Count how long gesture is held
     if (gesture === lastGestureRef.current) {
-      gestureHoldTimeRef.current += 1;
+      gestureHoldCountRef.current += 1;
     } else {
-      gestureHoldTimeRef.current = 0;
+      gestureHoldCountRef.current = 0;
       lastGestureRef.current = gesture;
     }
 
-    // Only switch if gesture is held for ~10 frames
-    if (gestureHoldTimeRef.current > 10) {
+    // Require gesture to be held for ~5 frames (reduced from 10 for faster response)
+    if (gestureHoldCountRef.current >= 5) {
       const mappedPattern = GESTURE_PATTERN_MAP[gesture];
-      if (mappedPattern && manualPattern === null) {
+      
+      if (mappedPattern) {
+        // Special gesture detected - switch to mapped pattern
+        console.log('Switching to pattern:', mappedPattern, 'for gesture:', gesture);
+        setGestureTriggeredPattern(mappedPattern);
         setSelectedPattern(mappedPattern);
       } else if (gesture === 'none' || gesture === 'open' || gesture === 'fist') {
-        // Return to manual selection if no special gesture
-        if (manualPattern) {
+        // No special gesture - return to manual pattern if one was set
+        if (gestureTriggeredPattern && manualPattern) {
+          setGestureTriggeredPattern(null);
           setSelectedPattern(manualPattern);
         }
       }
     }
-  }, [gestureState.gesture, manualPattern]);
+  }, [gestureState.gesture, manualPattern, gestureTriggeredPattern]);
 
   // Handle manual pattern selection
   const handlePatternChange = (pattern: PatternType) => {
     setManualPattern(pattern);
+    setGestureTriggeredPattern(null);
     setSelectedPattern(pattern);
   };
 
