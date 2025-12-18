@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { PatternType, ParticleColor, HandGestureState } from '@/types/particle';
+import { PatternType, ParticleColor, HandGestureState, GestureType } from '@/types/particle';
 import { PatternSelector } from './PatternSelector';
 import { ColorPicker } from './ColorPicker';
 import { FullscreenButton } from './FullscreenButton';
@@ -14,7 +14,36 @@ interface ControlPanelProps {
   gestureState: HandGestureState;
   isLoading: boolean;
   error: string | null;
+  sensitivity: number;
+  onSensitivityChange: (value: number) => void;
+  showPortrait: boolean;
+  onTogglePortrait: () => void;
 }
+
+// Define gesture labels and icons consistently
+const GESTURE_LABELS: Record<GestureType, string> = {
+  none: 'No gesture',
+  open: 'Open hand',
+  fist: 'Fist',
+  peace: '✌️ Peace → Heart',
+  pointing: '☝️ Pointing → Helix',
+  rock: '🤘 Rock → Galaxy',
+  iLoveYou: '🤟 I Love You',
+  callMe: '🤙 Call Me → I Love You',
+  middleFinger: '� Middle Finger → Portrait',
+};
+
+const GESTURE_ICONS: Record<GestureType, string> = {
+  none: '○',
+  open: '✋',
+  fist: '✊',
+  peace: '✌️',
+  pointing: '☝️',
+  rock: '🤘',
+  iLoveYou: '🤟',
+  callMe: '🤙',
+  middleFinger: '�',
+};
 
 export function ControlPanel({
   selectedPattern,
@@ -24,110 +53,142 @@ export function ControlPanel({
   gestureState,
   isLoading,
   error,
+  sensitivity,
+  onSensitivityChange,
+  showPortrait,
+  onTogglePortrait,
 }: ControlPanelProps) {
   const [isCollapsed, setIsCollapsed] = useState(false);
 
   return (
-    <>
-      {/* Top header */}
-      <header className="fixed top-0 left-0 right-0 z-20 p-4 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="glass-panel px-4 py-2">
-            <h1 className="text-lg font-semibold gradient-text">
-              Particle Flow
-            </h1>
-          </div>
-        </div>
-        
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => setIsCollapsed(!isCollapsed)}
-            className={cn(
-              'glass-panel p-3 transition-all duration-300',
-              'hover:bg-card/80 sm:hidden'
-            )}
-          >
-            <svg 
-              className={cn(
-                'w-5 h-5 text-primary transition-transform duration-300',
-                isCollapsed && 'rotate-180'
-              )} 
-              fill="none" 
-              viewBox="0 0 24 24" 
-              stroke="currentColor"
-            >
-              <path 
-                strokeLinecap="round" 
-                strokeLinejoin="round" 
-                strokeWidth={2} 
-                d="M4 6h16M4 12h16M4 18h16" 
-              />
-            </svg>
-          </button>
-          <FullscreenButton />
-        </div>
-      </header>
-
-      {/* Side panel */}
-      <aside
+    <div
+      className={cn(
+        'fixed z-50 transition-all duration-500 ease-in-out',
+        // Desktop: Right side
+        'md:right-6 md:top-1/2 md:-translate-y-1/2',
+        isCollapsed
+          ? 'md:translate-x-[calc(100%-20px)]'
+          : 'md:translate-x-0',
+        // Mobile: Bottom side
+        'max-md:bottom-0 max-md:left-0 max-md:right-0 max-md:px-4 max-md:pb-4',
+        isCollapsed
+          ? 'max-md:translate-y-[calc(100%-40px)]'
+          : 'max-md:translate-y-0'
+      )}
+    >
+      <button
+        onClick={() => setIsCollapsed(!isCollapsed)}
         className={cn(
-          'fixed right-0 top-0 bottom-0 z-10 w-72 p-4 pt-20',
-          'flex flex-col gap-4 overflow-y-auto',
-          'transition-transform duration-300',
-          isCollapsed && 'translate-x-full sm:translate-x-0'
+          "absolute bg-background/80 backdrop-blur-md border border-white/10 flex items-center justify-center hover:bg-background transition-colors group z-10",
+          // Desktop toggle
+          "md:-left-4 md:top-1/2 md:-translate-y-1/2 md:w-8 md:h-12 md:rounded-l-xl",
+          // Mobile toggle
+          "max-md:left-1/2 max-md:-top-4 max-md:-translate-x-1/2 max-md:w-16 max-md:h-8 max-md:rounded-t-xl"
         )}
       >
-        <PatternSelector
-          selectedPattern={selectedPattern}
-          onPatternChange={onPatternChange}
-        />
-        
-        <ColorPicker
-          selectedColor={selectedColor}
-          onColorChange={onColorChange}
-        />
+        <div className={cn(
+          'rounded-full bg-primary/50 group-hover:bg-primary transition-all',
+          // Desktop dot
+          'md:w-1.5 md:h-1.5',
+          isCollapsed && 'md:scale-150 md:bg-primary',
+          // Mobile bar
+          'max-md:w-8 max-md:h-1',
+          isCollapsed && 'max-md:w-12 max-md:bg-primary'
+        )} />
+      </button>
 
-        {/* Instructions */}
-        <div 
-          className="glass-panel p-4 animate-fade-in" 
-          style={{ animationDelay: '0.2s' }}
-        >
-          <h3 className="floating-label mb-3">Gesture Controls</h3>
-          <ul className="text-sm text-muted-foreground space-y-2">
-            <li className="flex items-start gap-2">
-              <span className="text-primary">✋</span>
-              <span>Open hand to <span className="text-foreground">expand</span></span>
-            </li>
-            <li className="flex items-start gap-2">
-              <span className="text-primary">✊</span>
-              <span>Fist to <span className="text-foreground">contract</span></span>
-            </li>
-            <li className="flex items-start gap-2">
-              <span className="text-primary">✌️</span>
-              <span>Peace sign → <span className="text-foreground">Heart shape</span></span>
-            </li>
-            <li className="flex items-start gap-2">
-              <span className="text-primary">👍</span>
-              <span>Thumbs up → <span className="text-foreground">I ♥ U message</span></span>
-            </li>
-            <li className="flex items-start gap-2">
-              <span className="text-primary">☝️</span>
-              <span>Point → <span className="text-foreground">Helix</span></span>
-            </li>
-            <li className="flex items-start gap-2">
-              <span className="text-primary">🤘</span>
-              <span>Rock sign → <span className="text-foreground">Galaxy</span></span>
-            </li>
-          </ul>
+      <div className={cn(
+        "bg-background/40 backdrop-blur-xl border border-white/10 shadow-2xl custom-scrollbar space-y-6 md:space-y-8 transition-all duration-500",
+        // Desktop sizing
+        "md:w-80 md:max-h-[90vh] md:rounded-3xl md:p-6",
+        // Mobile sizing
+        "max-md:w-full max-md:max-h-[60vh] max-md:rounded-t-3xl max-md:p-5 overflow-y-auto"
+      )}>
+        <div className="flex items-center justify-between">
+          <h2 className="text-xl font-bold tracking-tight bg-gradient-to-r from-white to-white/60 bg-clip-text text-transparent">
+            Particle Flow
+          </h2>
+          <FullscreenButton />
         </div>
-      </aside>
 
-      {/* Hand indicator */}
-      <HandIndicator
-        gestureState={gestureState}
-        isLoading={isLoading}
-        error={error}
-      />
-    </>
+        <section className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-xs font-semibold uppercase tracking-widest text-white/40">Pattern</h3>
+            <span className="text-[10px] px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">
+              {selectedPattern}
+            </span>
+          </div>
+          <PatternSelector selectedPattern={selectedPattern} onPatternChange={onPatternChange} />
+        </section>
+
+        <section className="space-y-4">
+          <h3 className="text-xs font-semibold uppercase tracking-widest text-white/40">Color Theme</h3>
+          <ColorPicker selectedColor={selectedColor} onColorChange={onColorChange} />
+          <p className="text-[10px] text-center text-white/30">
+            Selected: <span className="text-white/60 font-medium">{selectedColor.name}</span>
+          </p>
+        </section>
+
+        <section className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-xs font-semibold uppercase tracking-widest text-white/40">Gesture Sensitivity</h3>
+            <span className="text-[10px] text-primary font-mono">{Math.round(sensitivity * 100)}%</span>
+          </div>
+          <div className="px-2">
+            <input
+              type="range"
+              min="0"
+              max="1"
+              step="0.01"
+              value={sensitivity}
+              onChange={(e) => onSensitivityChange(parseFloat(e.target.value))}
+              className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer accent-primary hover:accent-primary/80 transition-all"
+            />
+            <div className="flex justify-between mt-2 text-[9px] text-white/20 uppercase tracking-tighter">
+              <span>Stable</span>
+              <span>Reactive</span>
+            </div>
+          </div>
+        </section>
+
+        <section className="space-y-4">
+          <h3 className="text-xs font-semibold uppercase tracking-widest text-white/40">Gesture Controls</h3>
+          <div className="space-y-2.5">
+            <div className="flex items-center gap-3 text-xs text-white/60 group">
+              <span className="w-5 h-5 flex items-center justify-center rounded-md bg-white/5 group-hover:bg-primary/10 transition-colors">✋</span>
+              <span className="group-hover:text-white transition-colors">Open hand to <span className="text-primary/80">expand</span></span>
+            </div>
+            <div className="flex items-center gap-3 text-xs text-white/60 group">
+              <span className="w-5 h-5 flex items-center justify-center rounded-md bg-white/5 group-hover:bg-primary/10 transition-colors">✊</span>
+              <span className="group-hover:text-white transition-colors">Fist to <span className="text-primary/80">contract</span></span>
+            </div>
+            <div className="flex items-center gap-3 text-xs text-white/60 group">
+              <span className="w-5 h-5 flex items-center justify-center rounded-md bg-white/5 group-hover:bg-primary/10 transition-colors">✌️</span>
+              <span className="group-hover:text-white transition-colors">Peace sign → <span className="text-primary/80">Heart shape</span></span>
+            </div>
+            <div className="flex items-center gap-3 text-xs text-white/60 group">
+              <span className="w-5 h-5 flex items-center justify-center rounded-md bg-white/5 group-hover:bg-primary/10 transition-colors">🤙</span>
+              <span className="group-hover:text-white transition-colors">Call me → <span className="text-primary/80">I love you</span></span>
+            </div>
+            <div className="flex items-center gap-3 text-xs text-white/60 group">
+              <span className="w-5 h-5 flex items-center justify-center rounded-md bg-white/5 group-hover:bg-primary/10 transition-colors">☝️</span>
+              <span className="group-hover:text-white transition-colors">Point → <span className="text-primary/80">Helix</span></span>
+            </div>
+            <div className="flex items-center gap-3 text-xs text-white/60 group">
+              <span className="w-5 h-5 flex items-center justify-center rounded-md bg-white/5 group-hover:bg-primary/10 transition-colors">🤘</span>
+              <span className="group-hover:text-white transition-colors">Rock sign → <span className="text-primary/80">Galaxy</span></span>
+            </div>
+            <div className="flex items-center gap-3 text-xs text-white/60 group">
+              <span className="w-5 h-5 flex items-center justify-center rounded-md bg-white/5 group-hover:bg-primary/10 transition-colors">�</span>
+              <span className="group-hover:text-white transition-colors">Middle finger → <span className="text-primary/80">Particle Portrait</span></span>
+            </div>
+          </div>
+        </section>
+
+        <div className="pt-2 border-t border-white/5">
+          <HandIndicator gestureState={gestureState} isLoading={isLoading} error={error} />
+        </div>
+      </div>
+    </div>
   );
 }

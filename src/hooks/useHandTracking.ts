@@ -12,7 +12,7 @@ export function useHandTracking() {
   });
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  
+
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const handsRef = useRef<Hands | null>(null);
   const cameraRef = useRef<Camera | null>(null);
@@ -23,21 +23,21 @@ export function useHandTracking() {
     const tip = landmarks[tipIdx];
     const pip = landmarks[pipIdx];
     const mcp = landmarks[mcpIdx];
-    
+
     // Distance from tip to wrist
     const tipToWrist = Math.sqrt(
-      Math.pow(tip.x - wrist.x, 2) + 
-      Math.pow(tip.y - wrist.y, 2) + 
+      Math.pow(tip.x - wrist.x, 2) +
+      Math.pow(tip.y - wrist.y, 2) +
       Math.pow(tip.z - wrist.z, 2)
     );
-    
+
     // Distance from pip to wrist
     const pipToWrist = Math.sqrt(
-      Math.pow(pip.x - wrist.x, 2) + 
-      Math.pow(pip.y - wrist.y, 2) + 
+      Math.pow(pip.x - wrist.x, 2) +
+      Math.pow(pip.y - wrist.y, 2) +
       Math.pow(pip.z - wrist.z, 2)
     );
-    
+
     // Finger is extended if tip is further from wrist than pip
     return tipToWrist > pipToWrist * 1.1;
   }, []);
@@ -48,11 +48,11 @@ export function useHandTracking() {
     const thumbIp = landmarks[3];
     const indexMcp = landmarks[5];
     const wrist = landmarks[0];
-    
+
     // Check if thumb tip is far from index finger base (spread out)
     const thumbToIndex = Math.abs(thumbTip.x - indexMcp.x);
     const palmWidth = Math.abs(landmarks[5].x - landmarks[17].x); // index mcp to pinky mcp
-    
+
     return thumbToIndex > palmWidth * 0.5;
   }, []);
 
@@ -63,45 +63,57 @@ export function useHandTracking() {
     const middle = isFingerExtended(landmarks, 12, 10, 9);
     const ring = isFingerExtended(landmarks, 16, 14, 13);
     const pinky = isFingerExtended(landmarks, 20, 18, 17);
-    
+
     const extendedCount = [index, middle, ring, pinky].filter(Boolean).length;
-    
+
     console.log('Gesture Debug:', { thumb, index, middle, ring, pinky, extendedCount });
 
-    // Peace sign: ONLY index and middle extended
+    // Peace sign: index and middle extended, ring and pinky closed (ignore thumb)
     if (index && middle && !ring && !pinky) {
       console.log('Detected: PEACE');
       return 'peace';
     }
-    
-    // Thumbs up: thumb extended, all fingers closed
-    if (thumb && !index && !middle && !ring && !pinky) {
-      console.log('Detected: THUMBS UP');
-      return 'thumbsUp';
-    }
-    
+
     // Pointing: only index extended
     if (index && !middle && !ring && !pinky) {
       console.log('Detected: POINTING');
       return 'pointing';
     }
-    
+
     // Rock gesture: index and pinky extended, middle and ring closed
     if (index && !middle && !ring && pinky) {
       console.log('Detected: ROCK');
       return 'rock';
     }
-    
+
+    // I Love You gesture: thumb, index, and pinky extended, middle and ring closed
+    if (thumb && index && pinky && !middle && !ring) {
+      console.log('Detected: I LOVE YOU');
+      return 'iLoveYou';
+    }
+
+    // Middle finger gesture: middle finger extended, others folded
+    if (middle && !index && !ring && !pinky) {
+      console.log('Detected: MIDDLE FINGER');
+      return 'middleFinger';
+    }
+
     // Open hand: 4+ fingers extended
     if (extendedCount >= 3) {
       return 'open';
     }
-    
+
     // Fist: all fingers closed
     if (extendedCount <= 1 && !thumb) {
       return 'fist';
     }
-    
+
+    // Call me gesture: thumb and pinky extended, others closed
+    if (thumb && pinky && !index && !middle && !ring) {
+      console.log('Detected: CALL ME');
+      return 'callMe';
+    }
+
     return 'none';
   }, [isFingerExtended, isThumbExtended]);
 
@@ -136,15 +148,13 @@ export function useHandTracking() {
   const onResults = useCallback((results: Results) => {
     if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
       const landmarks = results.multiHandLandmarks[0];
-      const openness = calculateHandOpenness(landmarks);
-      const gesture = detectGesture(landmarks);
-      const palmCenter = landmarks[9];
-      
+
       setGestureState({
         isDetected: true,
-        openness,
-        position: { x: palmCenter.x, y: palmCenter.y },
-        gesture,
+        openness: calculateHandOpenness(landmarks),
+        position: { x: landmarks[9].x, y: landmarks[9].y },
+        gesture: detectGesture(landmarks),
+        landmarks: landmarks.map(l => ({ x: l.x, y: l.y, z: l.z })),
       });
     } else {
       setGestureState(prev => ({

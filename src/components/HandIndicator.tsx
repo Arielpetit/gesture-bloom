@@ -12,9 +12,11 @@ const GESTURE_LABELS: Record<GestureType, string> = {
   open: 'Open hand',
   fist: 'Fist',
   peace: '✌️ Peace → Heart',
-  thumbsUp: '👍 Thumbs up → I♥U',
   pointing: '☝️ Pointing → Helix',
   rock: '🤘 Rock → Galaxy',
+  iLoveYou: '🤟 I Love You',
+  callMe: '🤙 Call Me → I Love You',
+  middleFinger: '🖕 Middle Finger → Portrait',
 };
 
 const GESTURE_ICONS: Record<GestureType, string> = {
@@ -22,9 +24,11 @@ const GESTURE_ICONS: Record<GestureType, string> = {
   open: '✋',
   fist: '✊',
   peace: '✌️',
-  thumbsUp: '👍',
   pointing: '☝️',
   rock: '🤘',
+  iLoveYou: '🤟',
+  callMe: '🤙',
+  middleFinger: '🖕',
 };
 
 export function HandIndicator({
@@ -50,18 +54,20 @@ export function HandIndicator({
     return '○';
   };
 
-  const isSpecialGesture = ['peace', 'thumbsUp', 'pointing', 'rock'].includes(gestureState.gesture);
+  const isSpecialGesture = ['peace', 'pointing', 'rock', 'iLoveYou', 'callMe', 'middleFinger'].includes(gestureState.gesture);
 
   return (
     <div
       className={cn(
         'hand-indicator flex items-center gap-2 transition-all duration-300',
+        // Mobile: smaller padding
+        'max-md:p-2 max-md:rounded-xl',
         gestureState.isDetected && 'detected',
-        isSpecialGesture && 'border-primary/60 bg-primary/10',
+        isSpecialGesture && 'border-primary bg-primary/20 shadow-[0_0_15px_rgba(var(--primary),0.3)]',
         error && 'border-destructive/50'
       )}
     >
-      <span 
+      <span
         className={cn(
           'text-lg transition-transform duration-300',
           gestureState.isDetected && 'animate-pulse-glow',
@@ -77,13 +83,13 @@ export function HandIndicator({
       )}>
         {getStatusText()}
       </span>
-      
+
       {/* Openness bar for open/fist gestures */}
       {gestureState.isDetected && !isSpecialGesture && (
         <div className="w-16 h-1.5 bg-muted rounded-full overflow-hidden ml-2">
-          <div 
+          <div
             className="h-full bg-primary rounded-full transition-all duration-100"
-            style={{ width: `${gestureState.openness * 100}%` }}
+            style={{ width: `${gestureState.openness * 100}% ` }}
           />
         </div>
       )}

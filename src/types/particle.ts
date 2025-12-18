@@ -1,6 +1,6 @@
 export type PatternType = 'sphere' | 'helix' | 'galaxy' | 'cube' | 'dna' | 'torus' | 'heart' | 'love';
 
-export type GestureType = 'none' | 'open' | 'fist' | 'peace' | 'thumbsUp' | 'pointing' | 'rock';
+export type GestureType = 'none' | 'open' | 'fist' | 'peace' | 'pointing' | 'rock' | 'iLoveYou' | 'callMe' | 'middleFinger';
 
 export interface PatternOption {
   id: PatternType;
@@ -21,6 +21,7 @@ export interface HandGestureState {
   openness: number; // 0 = closed fist, 1 = fully open
   position: { x: number; y: number } | null;
   gesture: GestureType;
+  landmarks?: { x: number; y: number; z: number }[];
 }
 
 export interface ParticleSystemConfig {

@@ -110,12 +110,12 @@ function generateHeart(positions: Float32Array, count: number, scale: number) {
   for (let i = 0; i < count; i++) {
     const t = Math.random() * Math.PI * 2;
     const r = Math.cbrt(Math.random()); // Volume distribution
-    
+
     // 3D heart parametric equation
     const x = 16 * Math.pow(Math.sin(t), 3);
     const y = 13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t);
     const z = (Math.random() - 0.5) * 4 * r;
-    
+
     const heartScale = scale * 0.15;
     positions[i * 3] = x * heartScale * r + (Math.random() - 0.5) * 0.3;
     positions[i * 3 + 1] = y * heartScale * r + (Math.random() - 0.5) * 0.3;
@@ -124,35 +124,67 @@ function generateHeart(positions: Float32Array, count: number, scale: number) {
 }
 
 function generateLoveText(positions: Float32Array, count: number, scale: number) {
-  // Define "I ♥ U" letter shapes with points
-  const letters = {
-    I: [
-      { x: -3, y: 0.8 }, { x: -3, y: 0.4 }, { x: -3, y: 0 }, { x: -3, y: -0.4 }, { x: -3, y: -0.8 },
-    ],
-    heart: [], // Will be generated
-    U: [
-      { x: 2.5, y: 0.8 }, { x: 2.5, y: 0.4 }, { x: 2.5, y: 0 }, { x: 2.5, y: -0.4 },
-      { x: 2.7, y: -0.7 }, { x: 3, y: -0.8 }, { x: 3.3, y: -0.7 },
-      { x: 3.5, y: -0.4 }, { x: 3.5, y: 0 }, { x: 3.5, y: 0.4 }, { x: 3.5, y: 0.8 },
-    ]
+  const points: { x: number; y: number }[] = [];
+
+  // Helper to add a line of points
+  const addLine = (x1: number, y1: number, x2: number, y2: number, numPoints: number) => {
+    for (let i = 0; i < numPoints; i++) {
+      const t = i / numPoints;
+      points.push({
+        x: x1 + (x2 - x1) * t,
+        y: y1 + (y2 - y1) * t
+      });
+    }
   };
 
-  // Generate heart points in the middle
-  for (let i = 0; i < 20; i++) {
-    const t = (i / 20) * Math.PI * 2;
-    const x = 0.4 * Math.pow(Math.sin(t), 3);
-    const y = 0.35 * Math.cos(t) - 0.12 * Math.cos(2 * t) - 0.05 * Math.cos(3 * t) - 0.025 * Math.cos(4 * t);
-    letters.heart.push({ x, y: y + 0.1 });
-  }
+  // Helper for curves
+  const addCurve = (cx: number, cy: number, rx: number, ry: number, start: number, end: number, numPoints: number) => {
+    for (let i = 0; i < numPoints; i++) {
+      const t = start + (end - start) * (i / numPoints);
+      points.push({
+        x: cx + Math.cos(t) * rx,
+        y: cy + Math.sin(t) * ry
+      });
+    }
+  };
 
-  const allPoints = [...letters.I, ...letters.heart.map(p => ({ x: p.x, y: p.y })), ...letters.U];
-  
+  // --- "I" ---
+  addLine(-6.5, 1.0, -6.5, -1.0, 30);
+  addLine(-7.0, 1.0, -6.0, 1.0, 15);
+  addLine(-7.0, -1.0, -6.0, -1.0, 15);
+
+  // --- "love" ---
+  // l
+  addLine(-4.5, 1.0, -4.5, -1.0, 30);
+  // o
+  addCurve(-3.0, 0, 0.6, 0.8, 0, Math.PI * 2, 40);
+  // v
+  addLine(-2.0, 0.8, -1.5, -1.0, 25);
+  addLine(-1.5, -1.0, -1.0, 0.8, 25);
+  // e
+  addCurve(0.2, 0, 0.6, 0.8, 0, Math.PI * 1.5, 30);
+  addLine(0.2, 0, 0.8, 0, 15);
+
+  // --- "you" ---
+  // y
+  addLine(2.0, 0.8, 2.5, -0.2, 20);
+  addLine(3.0, 0.8, 2.5, -0.2, 20);
+  addLine(2.5, -0.2, 2.0, -1.5, 20);
+  // o
+  addCurve(4.5, 0, 0.6, 0.8, 0, Math.PI * 2, 40);
+  // u
+  addLine(5.8, 0.8, 5.8, -0.5, 20);
+  addCurve(6.5, -0.5, 0.7, 0.5, Math.PI, Math.PI * 2, 20);
+  addLine(7.2, -0.5, 7.2, 0.8, 20);
+
+  const textScale = scale * 0.7;
   for (let i = 0; i < count; i++) {
-    const point = allPoints[i % allPoints.length];
+    const basePoint = points[i % points.length];
     const noise = 0.15;
-    positions[i * 3] = point.x * scale + (Math.random() - 0.5) * noise * scale;
-    positions[i * 3 + 1] = point.y * scale + (Math.random() - 0.5) * noise * scale;
-    positions[i * 3 + 2] = (Math.random() - 0.5) * 0.5 * scale;
+
+    positions[i * 3] = basePoint.x * textScale + (Math.random() - 0.5) * noise;
+    positions[i * 3 + 1] = basePoint.y * textScale + (Math.random() - 0.5) * noise;
+    positions[i * 3 + 2] = (Math.random() - 0.5) * 0.5;
   }
 }
 
@@ -164,11 +196,11 @@ export function interpolatePositions(
   const result = new Float32Array(source.length);
   // Use faster easing for more reactive feel
   const smoothProgress = easeOutExpo(progress);
-  
+
   for (let i = 0; i < source.length; i++) {
     result[i] = source[i] + (target[i] - source[i]) * smoothProgress;
   }
-  
+
   return result;
 }
 
