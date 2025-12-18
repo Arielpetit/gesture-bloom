@@ -178,6 +178,8 @@ export function useHandTracking() {
 
       const video = document.createElement('video');
       video.setAttribute('playsinline', '');
+      video.setAttribute('autoplay', '');
+      video.setAttribute('muted', '');
       video.style.display = 'none';
       document.body.appendChild(video);
       videoRef.current = video;
@@ -191,6 +193,10 @@ export function useHandTracking() {
       }
 
       console.log('HandsConstructor type:', typeof HandsConstructor);
+
+      if (typeof HandsConstructor !== 'function') {
+        throw new Error('Hands constructor not found');
+      }
 
       const hands = new HandsConstructor({
         locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
@@ -207,7 +213,18 @@ export function useHandTracking() {
       handsRef.current = hands;
 
       // Use global Camera constructor from CDN
-      const CameraConstructor = (window as any).Camera || Camera;
+      let CameraConstructor = (window as any).Camera || (mpHands as any).Camera || (mpHands as any).default?.Camera || Camera;
+
+      if (typeof CameraConstructor !== 'function' && (CameraConstructor as any).Camera) {
+        CameraConstructor = (CameraConstructor as any).Camera;
+      }
+
+      console.log('CameraConstructor type:', typeof CameraConstructor);
+
+      if (typeof CameraConstructor !== 'function') {
+        throw new Error('Camera constructor not found');
+      }
+
       const camera = new CameraConstructor(video, {
         onFrame: async () => {
           if (handsRef.current && videoRef.current) {
@@ -218,20 +235,44 @@ export function useHandTracking() {
         height: 480,
       });
 
-      await camera.start();
       cameraRef.current = camera;
+
+      // Small delay to ensure previous camera instances are fully released
+      await new Promise(resolve => setTimeout(resolve, 500));
+      await camera.start();
+
       setIsLoading(false);
     } catch (err) {
       console.error('Hand tracking initialization error:', err);
-      setError('Failed to initialize camera. Please allow camera access.');
+      setError(err instanceof Error ? err.message : 'Failed to initialize camera. Please allow camera access.');
       setIsLoading(false);
     }
   }, [onResults]);
 
   const cleanup = useCallback(() => {
-    if (cameraRef.current) cameraRef.current.stop();
-    if (handsRef.current) handsRef.current.close();
-    if (videoRef.current) videoRef.current.remove();
+    console.log('Cleaning up hand tracking...');
+    if (cameraRef.current) {
+      try {
+        cameraRef.current.stop();
+      } catch (e) {
+        console.error('Error stopping camera:', e);
+      }
+      cameraRef.current = null;
+    }
+    if (handsRef.current) {
+      try {
+        handsRef.current.close();
+      } catch (e) {
+        console.error('Error closing hands:', e);
+      }
+      handsRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.pause();
+      videoRef.current.srcObject = null;
+      videoRef.current.remove();
+      videoRef.current = null;
+    }
   }, []);
 
   useEffect(() => {
