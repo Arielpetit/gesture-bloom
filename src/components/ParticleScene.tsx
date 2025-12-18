@@ -14,7 +14,7 @@ export function ParticleScene({
   pattern,
   color,
   gestureState,
-  particleCount = 5000,
+  particleCount = 8000,
 }: ParticleSceneProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -26,35 +26,39 @@ export function ParticleScene({
   const currentPositionsRef = useRef<Float32Array | null>(null);
   const targetPositionsRef = useRef<Float32Array | null>(null);
   const basePositionsRef = useRef<Float32Array | null>(null);
+  const velocitiesRef = useRef<Float32Array | null>(null);
   
   const transitionProgressRef = useRef(1);
   const currentPatternRef = useRef(pattern);
   const currentScaleRef = useRef(1);
   const targetScaleRef = useRef(1);
   const rotationRef = useRef({ x: 0, y: 0 });
+  const isTransitioningRef = useRef(false);
 
   const [isInitialized, setIsInitialized] = useState(false);
 
-  // Create particle material
+  // Create smaller, more vibrant particle material
   const createMaterial = useCallback((particleColor: ParticleColor) => {
     const canvas = document.createElement('canvas');
-    canvas.width = 64;
-    canvas.height = 64;
+    canvas.width = 32;
+    canvas.height = 32;
     const ctx = canvas.getContext('2d')!;
     
-    const gradient = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
-    gradient.addColorStop(0, particleColor.color);
-    gradient.addColorStop(0.3, particleColor.color + 'aa');
-    gradient.addColorStop(0.6, particleColor.color + '44');
+    // More vibrant gradient with sharper core
+    const gradient = ctx.createRadialGradient(16, 16, 0, 16, 16, 16);
+    gradient.addColorStop(0, '#ffffff');
+    gradient.addColorStop(0.1, particleColor.color);
+    gradient.addColorStop(0.4, particleColor.color + 'cc');
+    gradient.addColorStop(0.7, particleColor.color + '44');
     gradient.addColorStop(1, 'transparent');
     
     ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, 64, 64);
+    ctx.fillRect(0, 0, 32, 32);
     
     const texture = new THREE.CanvasTexture(canvas);
     
     return new THREE.PointsMaterial({
-      size: 0.08,
+      size: 0.04, // Smaller particles
       map: texture,
       transparent: true,
       blending: THREE.AdditiveBlending,
@@ -71,32 +75,30 @@ export function ParticleScene({
     const width = container.clientWidth;
     const height = container.clientHeight;
 
-    // Scene
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x050810);
-    scene.fog = new THREE.FogExp2(0x050810, 0.05);
+    scene.background = new THREE.Color(0x030508);
+    scene.fog = new THREE.FogExp2(0x030508, 0.04);
     sceneRef.current = scene;
 
-    // Camera
     const camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
-    camera.position.z = 8;
+    camera.position.z = 7;
     cameraRef.current = camera;
 
-    // Renderer
     const renderer = new THREE.WebGLRenderer({ 
       antialias: true,
       alpha: true,
+      powerPreference: 'high-performance',
     });
     renderer.setSize(width, height);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     container.appendChild(renderer.domElement);
     rendererRef.current = renderer;
 
-    // Initial particles
     const positions = generatePattern(pattern, particleCount);
     basePositionsRef.current = positions.slice();
     currentPositionsRef.current = positions.slice();
     targetPositionsRef.current = positions.slice();
+    velocitiesRef.current = new Float32Array(particleCount * 3);
 
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
@@ -108,7 +110,6 @@ export function ParticleScene({
 
     setIsInitialized(true);
 
-    // Handle resize
     const handleResize = () => {
       if (!containerRef.current || !camera || !renderer) return;
       const w = containerRef.current.clientWidth;
@@ -130,21 +131,22 @@ export function ParticleScene({
     };
   }, [particleCount, createMaterial]);
 
-  // Update pattern
+  // Update pattern with fast transition
   useEffect(() => {
     if (!isInitialized || !basePositionsRef.current) return;
 
     if (pattern !== currentPatternRef.current) {
       currentPatternRef.current = pattern;
+      currentPositionsRef.current = basePositionsRef.current.slice();
       targetPositionsRef.current = generatePattern(pattern, particleCount);
       transitionProgressRef.current = 0;
+      isTransitioningRef.current = true;
     }
   }, [pattern, particleCount, isInitialized]);
 
   // Update color
   useEffect(() => {
     if (!particlesRef.current || !isInitialized) return;
-    
     const newMaterial = createMaterial(color);
     particlesRef.current.material = newMaterial;
   }, [color, createMaterial, isInitialized]);
@@ -152,12 +154,11 @@ export function ParticleScene({
   // Update scale based on gesture
   useEffect(() => {
     if (gestureState.isDetected) {
-      // Map openness (0-1) to scale (0.3-2.5)
-      targetScaleRef.current = 0.3 + gestureState.openness * 2.2;
+      targetScaleRef.current = 0.4 + gestureState.openness * 1.8;
     }
   }, [gestureState]);
 
-  // Animation loop
+  // Animation loop - faster and more reactive
   useEffect(() => {
     if (!isInitialized) return;
 
@@ -173,10 +174,12 @@ export function ParticleScene({
 
       const positionAttribute = particles.geometry.attributes.position as THREE.BufferAttribute;
       const positions = positionAttribute.array as Float32Array;
+      const velocities = velocitiesRef.current;
 
-      // Smooth pattern transition
+      // Fast pattern transition
       if (transitionProgressRef.current < 1) {
-        transitionProgressRef.current = Math.min(1, transitionProgressRef.current + 0.02);
+        // Much faster transition speed
+        transitionProgressRef.current = Math.min(1, transitionProgressRef.current + 0.08);
         
         if (currentPositionsRef.current && targetPositionsRef.current) {
           const interpolated = interpolatePositions(
@@ -192,33 +195,47 @@ export function ParticleScene({
           if (transitionProgressRef.current >= 1) {
             currentPositionsRef.current = targetPositionsRef.current.slice();
             basePositionsRef.current = targetPositionsRef.current.slice();
+            isTransitioningRef.current = false;
           }
         }
       }
 
-      // Smooth scale transition
-      currentScaleRef.current += (targetScaleRef.current - currentScaleRef.current) * 0.08;
+      // Smooth but reactive scale transition
+      const scaleSpeed = isTransitioningRef.current ? 0.15 : 0.12;
+      currentScaleRef.current += (targetScaleRef.current - currentScaleRef.current) * scaleSpeed;
       const scale = currentScaleRef.current;
 
-      // Apply scale to positions
-      if (basePositionsRef.current) {
-        for (let i = 0; i < positions.length; i++) {
-          const basePos = basePositionsRef.current[i];
-          positions[i] = basePos * scale;
+      // Apply scale and add micro-movement for vibrancy
+      const time = Date.now() * 0.003;
+      if (basePositionsRef.current && velocities) {
+        for (let i = 0; i < positions.length; i += 3) {
+          const baseX = basePositionsRef.current[i];
+          const baseY = basePositionsRef.current[i + 1];
+          const baseZ = basePositionsRef.current[i + 2];
+          
+          // Add subtle vibration/shimmer
+          const vibration = isTransitioningRef.current ? 0.02 : 0.005;
+          const px = baseX * scale + Math.sin(time + i * 0.1) * vibration;
+          const py = baseY * scale + Math.cos(time + i * 0.15) * vibration;
+          const pz = baseZ * scale + Math.sin(time + i * 0.12) * vibration;
+          
+          positions[i] = px;
+          positions[i + 1] = py;
+          positions[i + 2] = pz;
         }
       }
 
       positionAttribute.needsUpdate = true;
 
-      // Rotate
-      rotationRef.current.y += 0.002;
-      rotationRef.current.x = Math.sin(Date.now() * 0.0003) * 0.1;
+      // Faster rotation
+      rotationRef.current.y += 0.004;
+      rotationRef.current.x = Math.sin(Date.now() * 0.0005) * 0.15;
       particles.rotation.y = rotationRef.current.y;
       particles.rotation.x = rotationRef.current.x;
 
-      // Camera subtle movement
-      camera.position.x = Math.sin(Date.now() * 0.0002) * 0.5;
-      camera.position.y = Math.cos(Date.now() * 0.0003) * 0.3;
+      // Camera movement
+      camera.position.x = Math.sin(Date.now() * 0.0003) * 0.6;
+      camera.position.y = Math.cos(Date.now() * 0.0004) * 0.4;
       camera.lookAt(0, 0, 0);
 
       renderer.render(scene, camera);
@@ -235,7 +252,7 @@ export function ParticleScene({
     <div 
       ref={containerRef} 
       className="absolute inset-0 w-full h-full"
-      style={{ background: 'linear-gradient(180deg, #050810 0%, #0a1020 100%)' }}
+      style={{ background: 'linear-gradient(180deg, #030508 0%, #080c15 100%)' }}
     />
   );
 }
