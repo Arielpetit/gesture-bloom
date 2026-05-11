@@ -16,17 +16,36 @@ export function generatePattern(
     case 'torus': generateTorus(positions, count, scale); break;
     case 'heart': generateHeart(positions, count, scale); break;
     case 'love': generateLoveText(positions, count, scale); break;
+    case 'ambient': generateAmbientCloud(positions, count, scale); break;
+    case 'wordArrival': generateTextPattern(positions, count, scale, ['Certaines personnes', 'arrivent sans prevenir']); break;
+    case 'wordMoments': generateTextPattern(positions, count, scale, ['Tu rends', 'mes moments plus beaux']); break;
+    case 'wordSimple': generateTextPattern(positions, count, scale, ['Avec toi', 'tout est plus simple']); break;
+    case 'wordEnergy': generateTextPattern(positions, count, scale, ['J aime', 'ton energie']); break;
+    case 'wordFromMe': generateTextPattern(positions, count, scale, ['Je voulais creer', 'quelque chose de moi']); break;
+    case 'wordQuestion': generateTextPattern(positions, count, scale, ['Veux-tu etre', 'ma petite amie ?']); break;
     default: generateSphere(positions, count, scale);
   }
 
   return positions;
 }
 
+function generateAmbientCloud(positions: Float32Array, count: number, scale: number) {
+  for (let i = 0; i < count; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const radius = (1.2 + Math.random() * 3.9) * scale;
+    const drift = (Math.random() - 0.5) * 3.6 * scale;
+
+    positions[i * 3] = Math.cos(angle) * radius + (Math.random() - 0.5) * 2.2 * scale;
+    positions[i * 3 + 1] = drift;
+    positions[i * 3 + 2] = Math.sin(angle) * radius + (Math.random() - 0.5) * 2.2 * scale;
+  }
+}
+
 function generateSphere(positions: Float32Array, count: number, scale: number) {
   for (let i = 0; i < count; i++) {
     const theta = Math.random() * Math.PI * 2;
     const phi = Math.acos(2 * Math.random() - 1);
-    const r = Math.cbrt(Math.random()) * 3 * scale;
+    const r = Math.cbrt(Math.random()) * 3.55 * scale;
     positions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
     positions[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
     positions[i * 3 + 2] = r * Math.cos(phi);
@@ -109,16 +128,21 @@ function generateTorus(positions: Float32Array, count: number, scale: number) {
 function generateHeart(positions: Float32Array, count: number, scale: number) {
   for (let i = 0; i < count; i++) {
     const t = Math.random() * Math.PI * 2;
-    const r = Math.cbrt(Math.random()); // Volume distribution
-
-    // 3D heart parametric equation
+    const r = Math.sqrt(Math.random()); // More uniform distribution
+    
+    // Heart shape parametric equations
     const x = 16 * Math.pow(Math.sin(t), 3);
     const y = 13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t);
-    const z = (Math.random() - 0.5) * 4 * r;
+    
+    // Create a 3D volume by adding depth that is "puffer" in the middle
+    // and tapers off at the edges
+    const distFromCenter = r;
+    const depth = Math.sqrt(Math.max(0, 1 - distFromCenter * distFromCenter)) * 8;
+    const z = (Math.random() - 0.5) * depth;
 
     const heartScale = scale * 0.15;
-    positions[i * 3] = x * heartScale * r + (Math.random() - 0.5) * 0.3;
-    positions[i * 3 + 1] = y * heartScale * r + (Math.random() - 0.5) * 0.3;
+    positions[i * 3] = x * heartScale * r;
+    positions[i * 3 + 1] = y * heartScale * r;
     positions[i * 3 + 2] = z * heartScale;
   }
 }
@@ -186,6 +210,77 @@ function generateLoveText(positions: Float32Array, count: number, scale: number)
     positions[i * 3 + 1] = basePoint.y * textScale + (Math.random() - 0.5) * noise;
     positions[i * 3 + 2] = (Math.random() - 0.5) * 0.5;
   }
+}
+
+function generateTextPattern(positions: Float32Array, count: number, scale: number, lines: string[]) {
+  const points = sampleTextPoints(lines);
+
+  if (points.length === 0) {
+    generateSphere(positions, count, scale);
+    return;
+  }
+
+  const textScale = scale * 4.8;
+  const depth = scale * 0.32;
+
+  for (let i = 0; i < count; i++) {
+    const basePoint = points[Math.floor(Math.random() * points.length)];
+    const noise = 0.045;
+
+    positions[i * 3] = basePoint.x * textScale + (Math.random() - 0.5) * noise;
+    positions[i * 3 + 1] = basePoint.y * textScale + (Math.random() - 0.5) * noise;
+    positions[i * 3 + 2] = (Math.random() - 0.5) * depth;
+  }
+}
+
+function sampleTextPoints(lines: string[]) {
+  const canvas = document.createElement('canvas');
+  const width = 1400;
+  const height = 520;
+  canvas.width = width;
+  canvas.height = height;
+
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return [];
+
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  const fontSize = lines.length > 1 ? 154 : 228;
+  const lineHeight = fontSize * 0.95;
+  const startY = height / 2 - ((lines.length - 1) * lineHeight) / 2;
+
+  lines.forEach((line, index) => {
+    let fittedSize = fontSize;
+    ctx.font = `800 ${fittedSize}px Outfit, Arial, sans-serif`;
+
+    while (ctx.measureText(line).width > width * 0.86 && fittedSize > 72) {
+      fittedSize -= 8;
+      ctx.font = `800 ${fittedSize}px Outfit, Arial, sans-serif`;
+    }
+
+    ctx.fillText(line, width / 2, startY + index * lineHeight);
+  });
+
+  const data = ctx.getImageData(0, 0, width, height).data;
+  const points: { x: number; y: number }[] = [];
+  const step = 5;
+
+  for (let y = 0; y < height; y += step) {
+    for (let x = 0; x < width; x += step) {
+      const alpha = data[(y * width + x) * 4 + 3];
+      if (alpha > 80) {
+        points.push({
+          x: (x / width - 0.5) * 2,
+          y: -(y / height - 0.5) * 1.25,
+        });
+      }
+    }
+  }
+
+  return points;
 }
 
 export function interpolatePositions(

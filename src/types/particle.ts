@@ -1,6 +1,21 @@
-export type PatternType = 'sphere' | 'helix' | 'galaxy' | 'cube' | 'dna' | 'torus' | 'heart' | 'love';
+export type PatternType =
+  | 'sphere'
+  | 'helix'
+  | 'galaxy'
+  | 'cube'
+  | 'dna'
+  | 'torus'
+  | 'heart'
+  | 'love'
+  | 'ambient'
+  | 'wordArrival'
+  | 'wordMoments'
+  | 'wordSimple'
+  | 'wordEnergy'
+  | 'wordFromMe'
+  | 'wordQuestion';
 
-export type GestureType = 'none' | 'open' | 'fist' | 'peace' | 'pointing' | 'rock' | 'iLoveYou' | 'callMe' | 'middleFinger';
+export type GestureType = 'none' | 'open' | 'fist' | 'thumbUp' | 'peace' | 'pointing' | 'rock' | 'iLoveYou' | 'callMe' | 'middleFinger';
 
 export interface PatternOption {
   id: PatternType;

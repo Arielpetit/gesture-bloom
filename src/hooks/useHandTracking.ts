@@ -72,52 +72,74 @@ export function useHandTracking() {
 
     const extendedCount = [index, middle, ring, pinky].filter(Boolean).length;
 
-    console.log('Gesture Debug:', { thumb, index, middle, ring, pinky, extendedCount });
+    // Specific landmark positions for more precise checks
+    const thumbTip = landmarks[4];
+    const thumbIp = landmarks[3];
+    const thumbMcp = landmarks[2];
+    const indexTip = landmarks[8];
+    const indexMcp = landmarks[5];
+    const middleTip = landmarks[12];
+    const middleMcp = landmarks[9];
+    const pinkyTip = landmarks[20];
+    const wrist = landmarks[0];
 
-    // Peace sign: index and middle extended, ring and pinky closed (ignore thumb)
+    const thumbIsUp = thumbTip.y < thumbIp.y && thumbTip.y < thumbMcp.y && thumbTip.y < indexMcp.y;
+
+    // Peace sign: index and middle extended, ring and pinky closed
+    // Also check that index and middle are spread apart
     if (index && middle && !ring && !pinky) {
-      console.log('Detected: PEACE');
-      return 'peace';
+      const distance = Math.sqrt(
+        Math.pow(indexTip.x - middleTip.x, 2) +
+        Math.pow(indexTip.y - middleTip.y, 2)
+      );
+      const palmWidth = Math.sqrt(
+        Math.pow(landmarks[5].x - landmarks[17].x, 2) +
+        Math.pow(landmarks[5].y - landmarks[17].y, 2)
+      );
+      
+      if (distance > palmWidth * 0.2) {
+        return 'peace';
+      }
+    }
+
+    // Thumbs up: only thumb extended and pointing up
+    if (thumbIsUp && !index && !middle && !ring && !pinky) {
+      return 'thumbUp';
     }
 
     // Pointing: only index extended
     if (index && !middle && !ring && !pinky) {
-      console.log('Detected: POINTING');
       return 'pointing';
     }
 
     // Rock gesture: index and pinky extended, middle and ring closed
     if (index && !middle && !ring && pinky) {
-      console.log('Detected: ROCK');
       return 'rock';
     }
 
-    // I Love You gesture: thumb, index, and pinky extended, middle and ring closed
+    // iLoveYou gesture: thumb, index and pinky extended, others closed
     if (thumb && index && pinky && !middle && !ring) {
-      console.log('Detected: I LOVE YOU');
       return 'iLoveYou';
-    }
-
-    // Middle finger gesture: middle finger extended, others folded
-    if (middle && !index && !ring && !pinky) {
-      console.log('Detected: MIDDLE FINGER');
-      return 'middleFinger';
-    }
-
-    // Open hand: 4+ fingers extended
-    if (extendedCount >= 3) {
-      return 'open';
-    }
-
-    // Fist: all fingers closed
-    if (extendedCount <= 1 && !thumb) {
-      return 'fist';
     }
 
     // Call me gesture: thumb and pinky extended, others closed
     if (thumb && pinky && !index && !middle && !ring) {
-      console.log('Detected: CALL ME');
       return 'callMe';
+    }
+
+    // Open hand: 3+ fingers extended
+    if (extendedCount >= 3) {
+      return 'open';
+    }
+
+    // Middle finger gesture: only middle finger extended
+    if (middle && !index && !ring && !pinky && !thumb) {
+      return 'middleFinger';
+    }
+
+    // Fist: all fingers closed
+    if (extendedCount === 0 && !thumb) {
+      return 'fist';
     }
 
     return 'none';
@@ -245,7 +267,8 @@ export function useHandTracking() {
         maxNumHands: 1,
         modelComplexity: 1,
         minDetectionConfidence: 0.7,
-        minTrackingConfidence: 0.5,
+        minTrackingConfidence: 0.7,
+        selfieMode: true,
       });
 
       hands.onResults(onResults);
@@ -270,9 +293,8 @@ export function useHandTracking() {
             await handsRef.current.send({ image: videoRef.current });
           }
         },
-        // Use ideal constraints for better compatibility
-        width: { ideal: 640 },
-        height: { ideal: 480 },
+        width: 640,
+        height: 480,
       });
 
       cameraRef.current = camera;
