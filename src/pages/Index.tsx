@@ -12,6 +12,11 @@ declare global {
   }
 }
 
+type SequenceItem = {
+  text: string;
+  delay?: number; // duration to show this text in ms
+};
+
 type StoryStep = {
   id: string;
   pattern: PatternType;
@@ -20,7 +25,7 @@ type StoryStep = {
   signName?: string;
   signIcon?: string;
   label: string;
-  particleText: string;
+  particleText: string | SequenceItem[];
   guide: string;
   prompt?: string;
   image?: boolean;
@@ -49,7 +54,10 @@ const storySteps: StoryStep[] = [
     signIcon: '✌',
     pattern: 'wordArrival',
     label: '1',
-    particleText: 'Certaines personnes arrivent sans prevenir',
+    particleText: [
+      { text: 'Parfois… certaines personnes arrivent dans nos vies sans prévenir.', delay: 5000 },
+      { text: 'Et sans qu’on s’en rende compte… elles commencent à prendre une place importante' }
+    ],
     guide: 'Make a peace sign to reveal the next sentence.',
     prompt: 'Suite',
   },
@@ -61,7 +69,7 @@ const storySteps: StoryStep[] = [
     signIcon: '🤙',
     pattern: 'wordMoments',
     label: '2',
-    particleText: 'Tu rends mes moments plus beaux',
+    particleText: 'Tu as rendu beaucoup de moments plus beaux sans même le savoir',
     guide: 'Make the call me sign.',
     prompt: 'Suite',
   },
@@ -73,7 +81,11 @@ const storySteps: StoryStep[] = [
     signIcon: '🤘',
     pattern: 'wordSimple',
     label: '3',
-    particleText: 'Avec toi tout est plus simple',
+    particleText: [
+      { text: 'J’aime les moments avec toi', delay: 5000 },
+      { text: 'J’aime ton énergie', delay: 5000 },
+      { text: 'Et surtout… j’aime la personne que tu es' }
+    ],
     guide: 'Make the rock sign.',
     prompt: 'Suite',
   },
@@ -85,32 +97,37 @@ const storySteps: StoryStep[] = [
     signIcon: '☝',
     pattern: 'wordEnergy',
     label: '4',
-    particleText: 'J aime ton energie',
+    particleText: [
+      { text: 'je pourrais t’offrir quelque chose de classique…', delay: 5000 },
+      { text: 'mais je voulais surtout créer quelque chose qui vienne de moi' }
+    ],
     guide: 'Point one finger up.',
     prompt: 'Suite',
   },
   {
     id: 'final-silence',
     mode: 'gesture',
-    trigger: 'iLoveYou',
-    signName: 'I Love You',
-    signIcon: '🤟',
+    trigger: 'middleFinger',
+    signName: 'Middle finger',
+    signIcon: '🖕',
     pattern: 'wordFromMe',
     label: '5',
-    particleText: 'Je voulais creer quelque chose de moi',
-    guide: 'Make the I Love You sign for the final question.',
+    particleText: 'Alors Marylin ❤️',
+    delay: 5000,
+    autoNext: true,
+    guide: 'Fais le doigt d’honneur pour continuer.',
     prompt: 'Reveler la question',
   },
   {
     id: 'proposal',
     mode: 'gesture',
-    trigger: 'middleFinger',
-    signName: 'Middle finger',
-    signIcon: '🖕',
+    trigger: 'none',
+    signName: 'None',
+    signIcon: '✨',
     pattern: 'wordQuestion',
     label: 'Final',
     particleText: 'Veux-tu etre ma petite amie ?',
-    guide: 'Final gesture to reveal the question.',
+    guide: 'Final step.',
     image: true,
   },
 ];
@@ -127,11 +144,12 @@ const colorChoices = [
 
 const Index = () => {
   const [stepIndex, setStepIndex] = useState(0);
+  const [sequenceIndex, setSequenceIndex] = useState(0);
   const [soundOn, setSoundOn] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [particleCount, setParticleCount] = useState(4200);
-  const [selectedColor, setSelectedColor] = useState<ParticleColor>(getColor('white'));
+  const [selectedColor, setSelectedColor] = useState<ParticleColor>(getColor('coral'));
   const [customColor, setCustomColor] = useState(getColor('white').color);
   const { gestureState, isLoading, error, restart } = useHandTracking();
   const gestureBufferRef = useRef<GestureType[]>([]);
@@ -147,7 +165,7 @@ const Index = () => {
 
   useEffect(() => {
     const isSmallScreen = window.matchMedia('(max-width: 760px)').matches;
-    setParticleCount(isSmallScreen ? 3000 : 4600);
+    setParticleCount(isSmallScreen ? 10000 : 16000);
   }, []);
 
   useEffect(() => {
@@ -158,6 +176,39 @@ const Index = () => {
     document.addEventListener('fullscreenchange', handleFullscreenChange);
     return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
   }, []);
+
+  useEffect(() => {
+    setSequenceIndex(0);
+  }, [stepIndex]);
+
+  useEffect(() => {
+    const activeStep = storySteps[stepIndex];
+    
+    // Handle array sequences
+    if (Array.isArray(activeStep.particleText)) {
+      const currentPart = activeStep.particleText[sequenceIndex];
+      if (currentPart?.delay) {
+        if (sequenceIndex < activeStep.particleText.length - 1) {
+          const timer = setTimeout(() => {
+            setSequenceIndex(idx => idx + 1);
+          }, currentPart.delay);
+          return () => clearTimeout(timer);
+        } else if (activeStep.autoNext) {
+          const timer = setTimeout(() => {
+            setStepIndex(prev => Math.min(storySteps.length - 1, prev + 1));
+          }, currentPart.delay);
+          return () => clearTimeout(timer);
+        }
+      }
+    } 
+    // Handle single string with autoNext
+    else if (activeStep.autoNext && activeStep.delay) {
+      const timer = setTimeout(() => {
+        setStepIndex(prev => Math.min(storySteps.length - 1, prev + 1));
+      }, activeStep.delay);
+      return () => clearTimeout(timer);
+    }
+  }, [stepIndex, sequenceIndex]);
 
   useEffect(() => {
     const currentGesture = gestureState.gesture;
@@ -185,7 +236,6 @@ const Index = () => {
           gestureBufferRef.current = [];
           setStepIndex(i);
           
-          // Auto-start sound if not already on
           if (!soundOn) {
             void startSound();
           }
@@ -201,7 +251,6 @@ const Index = () => {
       try {
         oscillatorRef.current?.stop();
       } catch {
-        // Oscillator may already be stopped.
       }
       audioRef.current?.close();
     };
@@ -214,7 +263,6 @@ const Index = () => {
     try {
       oscillatorRef.current?.stop();
     } catch {
-      // Oscillator may already be stopped.
     }
 
     oscillatorRef.current = null;
@@ -236,7 +284,6 @@ const Index = () => {
       setSoundOn(true);
       return;
     } catch {
-      // Falls back to a tiny ambient tone when no song.mp3 is available yet.
     }
 
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
@@ -303,6 +350,15 @@ const Index = () => {
     });
   };
 
+  const isAtEndOfSequence = useMemo(() => {
+    if (Array.isArray(activeStep.particleText)) {
+      return sequenceIndex === activeStep.particleText.length - 1;
+    }
+    return true;
+  }, [activeStep.particleText, sequenceIndex]);
+
+  const nextStep = stepIndex < storySteps.length - 1 ? storySteps[stepIndex + 1] : null;
+
   return (
     <div className="relative min-h-screen w-full overflow-hidden bg-[#030508] text-white">
       <ParticleScene
@@ -311,6 +367,9 @@ const Index = () => {
         gestureState={gestureState}
         particleCount={particleCount}
         isImageVisible={!!activeStep.image}
+        customText={typeof activeStep.particleText === 'string' 
+          ? activeStep.particleText 
+          : (activeStep.particleText[sequenceIndex]?.text || '')}
       />
 
       <div className="pointer-events-none absolute inset-0 z-10 bg-[radial-gradient(circle_at_55%_50%,transparent_0%,rgba(3,5,8,0.08)_38%,rgba(3,5,8,0.62)_82%)]" />
@@ -367,14 +426,26 @@ const Index = () => {
         </header>
 
         {activeStep.image && (
-          <div className="pointer-events-none fixed inset-0 z-20 flex flex-col items-center justify-center p-6 text-center">
+          <div className="pointer-events-none fixed inset-0 z-20 flex flex-col items-center justify-center p-6 pb-48 text-center sm:pb-64">
             <div className="mb-8 w-64 overflow-hidden rounded-3xl border border-white/20 bg-white/[0.04] shadow-[0_28px_90px_rgba(0,0,0,0.55)] backdrop-blur-sm sm:w-80 md:w-96">
               <img src="/portrait.png" alt="Portrait" className="aspect-square w-full object-cover" />
             </div>
-            <div className="max-w-2xl">
-              <p className="text-3xl font-light tracking-widest text-white/90 drop-shadow-[0_2px_10px_rgba(0,0,0,0.5)] md:text-4xl">
-                {activeStep.particleText}
-              </p>
+            {/* Removed overlay text as requested - now only particles will show the text */}
+          </div>
+        )}
+
+        {/* Floating Next Gesture Hint - only show if sequence done AND no sign detected yet */}
+        {isAtEndOfSequence && nextStep && (!gestureState.isDetected || gestureState.gesture === 'none') && (
+          <div className="pointer-events-none fixed bottom-12 left-1/2 z-40 -translate-x-1/2 animate-in fade-in slide-in-from-bottom-8 duration-1000">
+            <div className="flex flex-col items-center gap-4">
+              <div className="flex h-20 w-20 items-center justify-center rounded-full border-2 border-white/20 bg-white/[0.08] text-4xl shadow-[0_0_40px_rgba(255,255,255,0.15)] backdrop-blur-xl">
+                {nextStep.signIcon}
+              </div>
+              <div className="rounded-full border border-white/15 bg-black/60 px-6 py-2 backdrop-blur-md">
+                <p className="text-xs font-bold uppercase tracking-[0.3em] text-white/90">
+                  Fais le signe <span className="text-rose-300">{nextStep.signName}</span> pour continuer
+                </p>
+              </div>
             </div>
           </div>
         )}
@@ -428,7 +499,11 @@ const Index = () => {
                     {stepIndex === index ? 'Now' : 'Next'}
                   </span>
                 </div>
-                <p className="mt-1 text-xs leading-snug">{step.particleText}</p>
+                <p className="mt-1 text-xs leading-snug">
+                  {typeof step.particleText === 'string' 
+                    ? step.particleText 
+                    : step.particleText[0].text}
+                </p>
               </div>
             ))}
           </div>

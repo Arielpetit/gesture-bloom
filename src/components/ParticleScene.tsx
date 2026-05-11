@@ -10,6 +10,7 @@ interface ParticleSceneProps {
   particleCount?: number;
   isImageVisible?: boolean;
   onRotationChange?: (rotation: { x: number; y: number }, isGrabbing: boolean) => void;
+  customText?: string;
 }
 
 const isTextPattern = (pattern: PatternType) => pattern.startsWith('word');
@@ -18,9 +19,10 @@ export function ParticleScene({
   pattern,
   color,
   gestureState,
-  particleCount = 8000,
+  particleCount = 16000,
   isImageVisible = false,
   onRotationChange,
+  customText,
 }: ParticleSceneProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -40,6 +42,7 @@ export function ParticleScene({
   const scatterProgressRef = useRef(0);
   const phaseRef = useRef<'idle' | 'scatter' | 'reform'>('idle');
   const currentPatternRef = useRef(pattern);
+  const currentTextRef = useRef(customText);
   const currentScaleRef = useRef(1);
   const targetScaleRef = useRef(1);
   const rotationRef = useRef({ x: 0, y: 0 });
@@ -73,13 +76,13 @@ export function ParticleScene({
         const noise = Math.random() * 0.4 + 0.6;
 
         // Brighter core for specular highlight
-        const coreHighlight = dist < 8 ? 1.5 : 1.0;
+        const coreHighlight = dist < 12 ? 2.0 : 1.2;
         const colorObj = new THREE.Color(particleColor.color);
 
         data[i] = Math.min(255, colorObj.r * 255 * coreHighlight);
         data[i + 1] = Math.min(255, colorObj.g * 255 * coreHighlight);
         data[i + 2] = Math.min(255, colorObj.b * 255 * coreHighlight);
-        data[i + 3] = opacity * noise * 255;
+        data[i + 3] = opacity * noise * 255 * 1.3; // More opaque for "thicker" look
       } else {
         data[i + 3] = 0;
       }
@@ -89,7 +92,7 @@ export function ParticleScene({
     const texture = new THREE.CanvasTexture(canvas);
 
     return new THREE.PointsMaterial({
-      size: 0.15,
+      size: 0.082, // Slightly larger for better "thickness"
       map: texture,
       transparent: true,
       blending: THREE.AdditiveBlending,
@@ -179,13 +182,22 @@ export function ParticleScene({
 
   // Update pattern with scatter-then-reform transition
   useEffect(() => {
-    if (!isInitialized || !basePositionsRef.current) return;
+    if (!isInitialized || !basePositionsRef.current || !targetPositionsRef.current) return;
 
-    if (pattern !== currentPatternRef.current) {
-      console.log('ParticleScene: Pattern change detected:', currentPatternRef.current, '->', pattern);
+    if (pattern !== currentPatternRef.current || customText !== currentTextRef.current) {
+      console.log('ParticleScene: Pattern or Text change detected:', 
+        currentPatternRef.current, '->', pattern, 
+        '|', currentTextRef.current, '->', customText
+      );
+      
       currentPatternRef.current = pattern;
+      currentTextRef.current = customText;
+      
       currentPositionsRef.current = basePositionsRef.current.slice();
-      targetPositionsRef.current = generatePattern(pattern, particleCount);
+      
+      // Pass text as a single line, let generatePattern handle wrapping
+      const customLines = customText ? [customText] : undefined;
+      targetPositionsRef.current = generatePattern(pattern, particleCount, 1, customLines);
 
       // Generate scatter positions - particles explode outward
       const scatterPositions = new Float32Array(particleCount * 3);
@@ -211,7 +223,7 @@ export function ParticleScene({
         currentScaleRef.current = 1;
       }
     }
-  }, [pattern, particleCount, isInitialized]);
+  }, [pattern, customText, particleCount, isInitialized]);
 
   // Update color
   useEffect(() => {
@@ -273,7 +285,7 @@ export function ParticleScene({
 
       // Scatter then reform transition
       if (phaseRef.current === 'scatter') {
-        scatterProgressRef.current = Math.min(1, scatterProgressRef.current + 0.025);
+        scatterProgressRef.current = Math.min(1, scatterProgressRef.current + 0.045);
 
         if (currentPositionsRef.current && scatterPositionsRef.current) {
           const smoothProgress = scatterProgressRef.current;
@@ -310,7 +322,7 @@ export function ParticleScene({
         }
       } else if (phaseRef.current === 'reform') {
         // Slightly slower reform for better readability
-        transitionProgressRef.current = Math.min(1, transitionProgressRef.current + 0.012);
+        transitionProgressRef.current = Math.min(1, transitionProgressRef.current + 0.022);
 
         if (currentPositionsRef.current && targetPositionsRef.current) {
           const smoothProgress = transitionProgressRef.current;
@@ -489,11 +501,11 @@ export function ParticleScene({
       particles.rotation.x = rotationRef.current.x;
 
       // Camera movement
-      const targetCameraY = isText ? (isImageVisible ? -4.5 : 0) : Math.cos(Date.now() * 0.0005) * 0.5;
+      const targetCameraY = isText ? (isImageVisible ? 2.8 : 0) : Math.cos(Date.now() * 0.0005) * 0.5;
       camera.position.x = isText ? 0 : Math.sin(Date.now() * 0.0004) * 0.8;
       camera.position.y += (targetCameraY - camera.position.y) * 0.05;
-      camera.position.z = isText ? 8 : 5.9;
-      camera.lookAt(0, isText && isImageVisible ? -4.5 : 0, 0);
+      camera.position.z = isText ? 8.5 : 5.9; // Slightly further back for better frame
+      camera.lookAt(0, isText && isImageVisible ? 2.8 : (isText ? -0.5 : 0), 0);
 
       renderer.render(scene, camera);
     };

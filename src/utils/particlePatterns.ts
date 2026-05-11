@@ -3,7 +3,8 @@ import { PatternType } from '@/types/particle';
 export function generatePattern(
   type: PatternType,
   count: number,
-  scale: number = 1
+  scale: number = 1,
+  customLines?: string[]
 ): Float32Array {
   const positions = new Float32Array(count * 3);
 
@@ -17,12 +18,12 @@ export function generatePattern(
     case 'heart': generateHeart(positions, count, scale); break;
     case 'love': generateLoveText(positions, count, scale); break;
     case 'ambient': generateAmbientCloud(positions, count, scale); break;
-    case 'wordArrival': generateTextPattern(positions, count, scale, ['Certaines personnes', 'arrivent sans prevenir']); break;
-    case 'wordMoments': generateTextPattern(positions, count, scale, ['Tu rends', 'mes moments plus beaux']); break;
-    case 'wordSimple': generateTextPattern(positions, count, scale, ['Avec toi', 'tout est plus simple']); break;
-    case 'wordEnergy': generateTextPattern(positions, count, scale, ['J aime', 'ton energie']); break;
-    case 'wordFromMe': generateTextPattern(positions, count, scale, ['Je voulais creer', 'quelque chose de moi']); break;
-    case 'wordQuestion': generateTextPattern(positions, count, scale, ['Veux-tu etre', 'ma petite amie ?']); break;
+    case 'wordArrival': generateTextPattern(positions, count, scale, customLines ?? ['Certaines personnes', 'arrivent sans prevenir']); break;
+    case 'wordMoments': generateTextPattern(positions, count, scale, customLines ?? ['Tu rends', 'mes moments plus beaux']); break;
+    case 'wordSimple': generateTextPattern(positions, count, scale, customLines ?? ['Avec toi', 'tout est plus simple']); break;
+    case 'wordEnergy': generateTextPattern(positions, count, scale, customLines ?? ['J aime', 'ton energie']); break;
+    case 'wordFromMe': generateTextPattern(positions, count, scale, customLines ?? ['Je voulais creer', 'quelque chose de moi']); break;
+    case 'wordQuestion': generateTextPattern(positions, count, scale, customLines ?? ['Veux-tu etre', 'ma petite amie ?']); break;
     default: generateSphere(positions, count, scale);
   }
 
@@ -220,12 +221,12 @@ function generateTextPattern(positions: Float32Array, count: number, scale: numb
     return;
   }
 
-  const textScale = scale * 4.8;
-  const depth = scale * 0.32;
+  const textScale = scale * 5.2; // Slightly larger text
+  const depth = scale * 0.24; // Thinner depth for better front-facing clarity
 
   for (let i = 0; i < count; i++) {
     const basePoint = points[Math.floor(Math.random() * points.length)];
-    const noise = 0.045;
+    const noise = 0.012; // Extremely low noise for sharpest possible letters
 
     positions[i * 3] = basePoint.x * textScale + (Math.random() - 0.5) * noise;
     positions[i * 3 + 1] = basePoint.y * textScale + (Math.random() - 0.5) * noise;
@@ -236,7 +237,7 @@ function generateTextPattern(positions: Float32Array, count: number, scale: numb
 function sampleTextPoints(lines: string[]) {
   const canvas = document.createElement('canvas');
   const width = 1400;
-  const height = 520;
+  const height = 650; // Increased for better breathing room
   canvas.width = width;
   canvas.height = height;
 
@@ -248,16 +249,47 @@ function sampleTextPoints(lines: string[]) {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
-  const fontSize = lines.length > 1 ? 154 : 228;
-  const lineHeight = fontSize * 0.95;
-  const startY = height / 2 - ((lines.length - 1) * lineHeight) / 2;
+  const wrapText = (text: string, maxWidth: number) => {
+    const words = text.split(' ');
+    const lines = [];
+    let currentLine = words[0];
 
-  lines.forEach((line, index) => {
+    for (let i = 1; i < words.length; i++) {
+      const word = words[i];
+      const width = ctx.measureText(currentLine + " " + word).width;
+      if (width < maxWidth) {
+        currentLine += " " + word;
+      } else {
+        lines.push(currentLine);
+        currentLine = word;
+      }
+    }
+    lines.push(currentLine);
+    return lines;
+  };
+
+  const finalLines: string[] = [];
+  const maxWidth = width * 0.88;
+  
+  ctx.font = `800 120px Outfit, Arial, sans-serif`; // Base font for measuring
+  lines.forEach(line => {
+    if (ctx.measureText(line).width > maxWidth) {
+      finalLines.push(...wrapText(line, maxWidth));
+    } else {
+      finalLines.push(line);
+    }
+  });
+
+   const fontSize = finalLines.length > 3 ? 85 : finalLines.length > 2 ? 100 : finalLines.length > 1 ? 135 : 180;
+  const lineHeight = fontSize * 1.05;
+  const startY = height / 2 - ((finalLines.length - 1) * lineHeight) / 2;
+
+  finalLines.forEach((line, index) => {
     let fittedSize = fontSize;
     ctx.font = `800 ${fittedSize}px Outfit, Arial, sans-serif`;
 
-    while (ctx.measureText(line).width > width * 0.86 && fittedSize > 72) {
-      fittedSize -= 8;
+    while (ctx.measureText(line).width > maxWidth && fittedSize > 60) {
+      fittedSize -= 5;
       ctx.font = `800 ${fittedSize}px Outfit, Arial, sans-serif`;
     }
 
@@ -266,7 +298,7 @@ function sampleTextPoints(lines: string[]) {
 
   const data = ctx.getImageData(0, 0, width, height).data;
   const points: { x: number; y: number }[] = [];
-  const step = 5;
+  const step = 4; // Denser sampling for better readability
 
   for (let y = 0; y < height; y += step) {
     for (let x = 0; x < width; x += step) {

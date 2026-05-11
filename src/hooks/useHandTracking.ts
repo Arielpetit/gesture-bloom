@@ -107,7 +107,7 @@ export function useHandTracking() {
       return 'thumbUp';
     }
 
-    // Pointing: only index extended
+    // Pointing: only index extended (thumb can be anything)
     if (index && !middle && !ring && !pinky) {
       return 'pointing';
     }
