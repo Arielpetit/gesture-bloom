@@ -190,6 +190,18 @@ export function ParticleScene({
         '|', currentTextRef.current, '->', customText
       );
       
+      // Special effect for Victory: Explosion!
+      if (pattern === 'victoryHeart') {
+        for (let i = 0; i < particleCount; i++) {
+          const vx = (Math.random() - 0.5) * 1.5;
+          const vy = (Math.random() - 0.5) * 1.5;
+          const vz = (Math.random() - 0.5) * 1.5;
+          velocitiesRef.current[i * 3] += vx;
+          velocitiesRef.current[i * 3 + 1] += vy;
+          velocitiesRef.current[i * 3 + 2] += vz;
+        }
+      }
+
       currentPatternRef.current = pattern;
       currentTextRef.current = customText;
       
@@ -354,6 +366,38 @@ export function ParticleScene({
           }
 
           if (transitionProgressRef.current >= 1) {
+            // Add pulsing effect for Victory Heart
+            let scaleMultiplier = 1.0;
+            if (pattern === 'victoryHeart') {
+              scaleMultiplier = 1.0 + Math.sin(Date.now() * 0.003) * 0.08;
+            }
+
+            for (let i = 0; i < particleCount; i++) {
+              // Apply damping to velocities
+              velocitiesRef.current[i * 3] *= 0.94;
+              velocitiesRef.current[i * 3 + 1] *= 0.94;
+              velocitiesRef.current[i * 3 + 2] *= 0.94;
+
+              currentPositionsRef.current[i * 3] += velocitiesRef.current[i * 3];
+              currentPositionsRef.current[i * 3 + 1] += velocitiesRef.current[i * 3 + 1];
+              currentPositionsRef.current[i * 3 + 2] += velocitiesRef.current[i * 3 + 2];
+
+              // Apply pulse scale
+              if (scaleMultiplier !== 1.0) {
+                const tx = targetPositionsRef.current[i * 3] * scaleMultiplier;
+                const ty = targetPositionsRef.current[i * 3 + 1] * scaleMultiplier;
+                const tz = targetPositionsRef.current[i * 3 + 2] * scaleMultiplier;
+                
+                currentPositionsRef.current[i * 3] += (tx - currentPositionsRef.current[i * 3]) * 0.05;
+                currentPositionsRef.current[i * 3 + 1] += (ty - currentPositionsRef.current[i * 3 + 1]) * 0.05;
+                currentPositionsRef.current[i * 3 + 2] += (tz - currentPositionsRef.current[i * 3 + 2]) * 0.05;
+              } else {
+                currentPositionsRef.current[i * 3] += (targetPositionsRef.current[i * 3] - currentPositionsRef.current[i * 3]) * 0.08;
+                currentPositionsRef.current[i * 3 + 1] += (targetPositionsRef.current[i * 3 + 1] - currentPositionsRef.current[i * 3 + 1]) * 0.08;
+                currentPositionsRef.current[i * 3 + 2] += (targetPositionsRef.current[i * 3 + 2] - currentPositionsRef.current[i * 3 + 2]) * 0.08;
+              }
+            }      
+            
             currentPositionsRef.current = targetPositionsRef.current.slice();
             basePositionsRef.current = targetPositionsRef.current.slice();
             isTransitioningRef.current = false;
