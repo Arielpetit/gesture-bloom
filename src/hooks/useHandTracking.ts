@@ -112,6 +112,15 @@ export function useHandTracking() {
       return 'pointing';
     }
 
+    // OK Sign: Thumb and Index tips close, others up
+    const thumbIndexDist = Math.sqrt(
+      Math.pow(landmarks[4].x - landmarks[8].x, 2) +
+      Math.pow(landmarks[4].y - landmarks[8].y, 2)
+    );
+    if (thumbIndexDist < 0.05 && middle && ring && pinky) {
+      return 'okSign';
+    }
+
     // Rock gesture: index and pinky extended, middle and ring closed
     if (index && !middle && !ring && pinky) {
       return 'rock';

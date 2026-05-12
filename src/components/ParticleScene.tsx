@@ -49,6 +49,7 @@ export function ParticleScene({
   const rotationVelocityRef = useRef({ x: 0, y: 0 });
   const lastHandPosRef = useRef<{ x: number; y: number } | null>(null);
   const isTransitioningRef = useRef(false);
+  const fireworksRef = useRef<{ x: number; y: number; z: number; time: number; color: THREE.Color }[]>([]);
 
   const [isInitialized, setIsInitialized] = useState(false);
 
@@ -396,6 +397,67 @@ export function ParticleScene({
                 currentPositionsRef.current[i * 3 + 1] += (targetPositionsRef.current[i * 3 + 1] - currentPositionsRef.current[i * 3 + 1]) * 0.08;
                 currentPositionsRef.current[i * 3 + 2] += (targetPositionsRef.current[i * 3 + 2] - currentPositionsRef.current[i * 3 + 2]) * 0.08;
               }
+
+              // Realistic Fireworks Logic
+              if (pattern === 'victoryHeart') {
+                // Occasional new burst
+                if (Math.random() > 0.97 && fireworksRef.current.length < 8) {
+                  fireworksRef.current.push({
+                    x: (Math.random() - 0.5) * 60, // Wider range
+                    y: (Math.random() - 0.5) * 30 + 5,
+                    z: (Math.random() - 0.5) * 15,
+                    time: Date.now(),
+                    color: new THREE.Color(['#ffffff', '#ffdd44', '#ff88aa', '#44ffff'][Math.floor(Math.random() * 4)])
+                  });
+                }
+
+                // Cleanup old fireworks
+                fireworksRef.current = fireworksRef.current.filter(f => Date.now() - f.time < 1500);
+
+                // Affect particles near burst centers
+                fireworksRef.current.forEach(fw => {
+                  const age = (Date.now() - fw.time) / 1000;
+                  const distSq = 
+                    Math.pow(currentPositionsRef.current![i * 3] - fw.x, 2) +
+                    Math.pow(currentPositionsRef.current![i * 3 + 1] - fw.y, 2);
+                  
+                  if (distSq < 49) { // Even wider range (radius 7)
+                    if (age < 0.1) { // Initial massive pop
+                      const angle = Math.random() * Math.PI * 2;
+                      const phi = Math.random() * Math.PI;
+                      const speed = 4.0 + Math.random() * 6.0; // Much faster
+                      
+                      velocitiesRef.current![i * 3] += Math.sin(phi) * Math.cos(angle) * speed;
+                      velocitiesRef.current![i * 3 + 1] += Math.sin(phi) * Math.sin(angle) * speed;
+                      velocitiesRef.current![i * 3 + 2] += Math.cos(phi) * speed;
+                    }
+                    
+                    // While exploding, ignore target pull and apply gravity + glow
+                    if (age < 1.0) {
+                      velocitiesRef.current![i * 3 + 1] -= 0.05; // Stronger gravity
+                      
+                      // Flash white/gold
+                      const flash = Math.max(0, 1.0 - age * 1.2);
+                      const colorAttr = (particlesRef.current!.geometry.attributes.color as THREE.BufferAttribute);
+                      colorAttr.setXYZ(
+                        i, 
+                        Math.min(1.0, baseColorsRef.current![i * 3] + fw.color.r * flash),
+                        Math.min(1.0, baseColorsRef.current![i * 3 + 1] + fw.color.g * flash),
+                        Math.min(1.0, baseColorsRef.current![i * 3 + 2] + fw.color.b * flash)
+                      );
+                      colorAttr.needsUpdate = true;
+                      
+                      return; // SKIP the target pull below
+                    }
+                  }
+                });
+                
+                // Extra shimmer for all particles in victory mode
+                if (Math.random() > 0.98) {
+                   velocitiesRef.current![i * 3] += (Math.random() - 0.5) * 0.4;
+                   velocitiesRef.current![i * 3 + 1] += (Math.random() - 0.5) * 0.4;
+                }
+              }
             }      
             
             currentPositionsRef.current = targetPositionsRef.current.slice();
@@ -540,6 +602,11 @@ export function ParticleScene({
       } else {
         rotationRef.current.x *= 0.82;
         rotationRef.current.y *= 0.82;
+      }
+      // Apply rotation (unless victoryHeart)
+      if (pattern === 'victoryHeart') {
+        rotationRef.current.y *= 0.9;
+        rotationRef.current.x *= 0.9;
       }
       particles.rotation.y = rotationRef.current.y;
       particles.rotation.x = rotationRef.current.x;

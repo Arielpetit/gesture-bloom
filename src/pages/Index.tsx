@@ -29,37 +29,39 @@ type StoryStep = {
   guide: string;
   prompt?: string;
   image?: boolean;
+  delay?: number;
+  autoNext?: boolean;
 };
 
 const getColor = (id: string) => PARTICLE_COLORS.find(color => color.id === id) ?? PARTICLE_COLORS[0];
 
 const storySteps: StoryStep[] = [
   {
-    id: 'waiting',
+    id: 'intro',
     mode: 'gesture',
-    trigger: 'thumbUp',
-    signName: 'Thumbs up',
-    signIcon: '👍',
+    trigger: 'okSign',
+    signName: 'OK Sign',
+    signIcon: '👌',
     pattern: 'heart',
     label: 'Start',
     particleText: 'Free particles',
-    guide: 'Put your hand in front of the camera, then make a thumbs up.',
-    prompt: 'Avancer sans camera',
+    guide: 'Put your hand in front of the camera, then make an OK sign.',
+    prompt: 'Commencer',
   },
   {
     id: 'arrival',
     mode: 'gesture',
     trigger: 'peace',
     signName: 'Peace sign',
-    signIcon: '✌',
+    signIcon: '✌️',
     pattern: 'wordArrival',
     label: '1',
     particleText: [
-      { text: 'Parfois… certaines personnes arrivent dans nos vies sans prévenir.', delay: 5000 },
+      { text: 'Parfois… certaines personnes arrivent dans nos vies sans prévenir.', delay: 7000 },
       { text: 'Et sans qu’on s’en rende compte… elles commencent à prendre une place importante' }
     ],
-    guide: 'Make a peace sign to reveal the next sentence.',
-    prompt: 'Suite',
+    guide: 'Make a peace sign to reveal the story.',
+    prompt: 'Suivant',
   },
   {
     id: 'made-better',
@@ -71,10 +73,10 @@ const storySteps: StoryStep[] = [
     label: '2',
     particleText: 'Tu as rendu beaucoup de moments plus beaux sans même le savoir',
     guide: 'Make the call me sign.',
-    prompt: 'Suite',
+    prompt: 'Suivant',
   },
   {
-    id: 'personal',
+    id: 'moments',
     mode: 'gesture',
     trigger: 'rock',
     signName: 'Rock sign',
@@ -82,67 +84,57 @@ const storySteps: StoryStep[] = [
     pattern: 'wordSimple',
     label: '3',
     particleText: [
-      { text: 'J’aime les moments avec toi', delay: 5000 },
-      { text: 'J’aime ton énergie', delay: 5000 },
+      { text: 'J’aime assez bien les moments avec toi.', delay: 7000 },
+      { text: 'J’aime ton énergie.', delay: 7000 },
       { text: 'Et surtout… j’aime la personne que tu es' }
     ],
     guide: 'Make the rock sign.',
-    prompt: 'Suite',
+    prompt: 'Suivant',
   },
   {
-    id: 'energy',
+    id: 'simple',
     mode: 'gesture',
     trigger: 'pointing',
     signName: 'Pointing',
-    signIcon: '☝',
+    signIcon: '☝️',
     pattern: 'wordEnergy',
     label: '4',
     particleText: [
-      { text: 'je pourrais t’offrir quelque chose de classique…', delay: 5000 },
-      { text: 'mais je voulais surtout créer quelque chose qui vienne de moi' }
+      { text: 'Je pouvais t’offrir quelque chose d’assez classique pour symboliser le moment…', delay: 7000 },
+      { text: 'mais je voulais surtout créer quelque chose qui vienne de moi', delay: 7000 },
+      { text: 'Je ne veux pas être assez long…' }
     ],
     guide: 'Point one finger up.',
     prompt: 'Suite',
   },
   {
-    id: 'final-silence',
+    id: 'final-narrative',
     mode: 'gesture',
     trigger: 'middleFinger',
     signName: 'Middle finger',
     signIcon: '🖕',
     pattern: 'wordFromMe',
     label: '5',
-    particleText: 'Alors Marylin ❤️',
-    delay: 5000,
-    autoNext: true,
-    guide: 'Fais le doigt d’honneur pour continuer.',
-    prompt: 'Reveler la question',
-  },
-  {
-    id: 'proposal',
-    mode: 'gesture',
-    trigger: 'thumbUp',
-    signName: 'Thumbs Up',
-    signIcon: '👍',
-    pattern: 'wordQuestion',
-    label: '6',
-    particleText: 'Veux-tu etre ma petite amie ?',
-    guide: 'Fais un pouce en l’air pour dire OUI !',
+    particleText: [
+      { text: 'Alors Marylin ❤️', delay: 7000 },
+      { text: 'Veux-tu etre ma petite amie ?' }
+    ],
+    guide: 'Fais le doigt d’honneur pour commencer le message final.',
+    prompt: 'Question finale',
     image: true,
-    prompt: 'OUI !',
   },
   {
     id: 'victory',
     mode: 'gesture',
-    trigger: 'none',
-    signName: 'Heart',
-    signIcon: '❤️',
+    trigger: 'thumbUp',
+    signName: 'Thumbs Up',
+    signIcon: '👍',
     pattern: 'victoryHeart',
     label: '❤️',
     particleText: 'JE T’AIME ! ❤️',
-    guide: 'Vous êtes maintenant ensemble ! ✨',
-    image: true,
-    prompt: 'Fin',
+    guide: 'Fais un pouce en l’air pour dire OUI ! ✨',
+    image: false,
+    prompt: 'OUI !',
   },
 ];
 
@@ -159,6 +151,7 @@ const colorChoices = [
 const Index = () => {
   const [stepIndex, setStepIndex] = useState(0);
   const [sequenceIndex, setSequenceIndex] = useState(0);
+  const [hasCompletedAll, setHasCompletedAll] = useState(false);
   const [soundOn, setSoundOn] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -197,31 +190,32 @@ const Index = () => {
 
   useEffect(() => {
     const activeStep = storySteps[stepIndex];
+    let timer: number | undefined;
     
-    // Handle array sequences
     if (Array.isArray(activeStep.particleText)) {
       const currentPart = activeStep.particleText[sequenceIndex];
       if (currentPart?.delay) {
         if (sequenceIndex < activeStep.particleText.length - 1) {
-          const timer = setTimeout(() => {
+          timer = window.setTimeout(() => {
             setSequenceIndex(idx => idx + 1);
           }, currentPart.delay);
-          return () => clearTimeout(timer);
         } else if (activeStep.autoNext) {
-          const timer = setTimeout(() => {
+          console.log(`[Timer] Auto-advancing from step ${stepIndex} in ${currentPart.delay}ms`);
+          timer = window.setTimeout(() => {
             setStepIndex(prev => Math.min(storySteps.length - 1, prev + 1));
           }, currentPart.delay);
-          return () => clearTimeout(timer);
         }
       }
-    } 
-    // Handle single string with autoNext
-    else if (activeStep.autoNext && activeStep.delay) {
-      const timer = setTimeout(() => {
+    } else if (activeStep.autoNext && activeStep.delay) {
+      console.log(`[Timer] Auto-advancing from step ${stepIndex} in ${activeStep.delay}ms`);
+      timer = window.setTimeout(() => {
         setStepIndex(prev => Math.min(storySteps.length - 1, prev + 1));
       }, activeStep.delay);
-      return () => clearTimeout(timer);
     }
+
+    return () => {
+      if (timer) window.clearTimeout(timer);
+    };
   }, [stepIndex, sequenceIndex]);
 
   useEffect(() => {
@@ -233,31 +227,43 @@ const Index = () => {
       gestureBufferRef.current.shift();
     }
 
-    const now = Date.now();
-    const requiredCount = 8;
+    const counts: Record<string, number> = {};
+    gestureBufferRef.current.forEach(g => counts[g] = (counts[g] || 0) + 1);
+    const mostFrequent = Object.entries(counts).sort((a, b) => b[1] - a[1])[0]?.[0];
 
-    // Check if any step's trigger is consistently detected in the buffer
-    for (let i = 0; i < storySteps.length; i++) {
-      const step = storySteps[i];
-      if (!step.trigger) continue;
+    // Chronological restriction: only check the NEXT step, unless completed all
+    const nextStepIdx = stepIndex + 1;
+    if (nextStepIdx < storySteps.length && storySteps[nextStepIdx].trigger === mostFrequent) {
+      const now = Date.now();
+      if (now - lastAdvanceRef.current > 1500) {
 
-      const matchingCount = gestureBufferRef.current.filter(g => g === step.trigger).length;
-      
-      if (matchingCount >= requiredCount && now - lastAdvanceRef.current > 1500) {
-        if (stepIndex !== i) {
-          console.log(`Switching to step ${i} based on gesture: ${step.trigger}`);
+        
+        const isAtEndOfSequence = !Array.isArray(activeStep.particleText) || 
+                                 sequenceIndex === activeStep.particleText.length - 1;
+
+        if (isAtEndOfSequence) {
           lastAdvanceRef.current = now;
+          setSequenceIndex(0);
           gestureBufferRef.current = [];
-          setStepIndex(i);
-          
-          if (!soundOn) {
-            void startSound();
-          }
+          setStepIndex(nextStepIdx);
+          if (nextStepIdx === storySteps.length - 1) setHasCompletedAll(true);
+          if (!soundOn) void startSound();
         }
-        break;
       }
     }
-  }, [gestureState, stepIndex, soundOn]);
+    
+    // If completed all, allow jumping to any step
+    if (hasCompletedAll) {
+      for (let i = 0; i < storySteps.length; i++) {
+        if (i !== stepIndex && storySteps[i].trigger === mostFrequent) {
+          setStepIndex(i);
+          setSequenceIndex(0);
+          gestureBufferRef.current = [];
+          break;
+        }
+      }
+    }
+  }, [gestureState, stepIndex, soundOn, hasCompletedAll, sequenceIndex]);
 
   useEffect(() => {
     return () => {
