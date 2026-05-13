@@ -317,31 +317,31 @@ function sampleTextPoints(lines: string[]) {
 }
 
 function generateVictoryHeart(positions: Float32Array, count: number, scale: number, lines: string[]) {
-  // Use 55% particles for the heart outline and 45% for the text inside
-  const heartCount = Math.floor(count * 0.55);
+  // Use 70% particles for the heart outline to make it much thicker and visible
+  const heartCount = Math.floor(count * 0.70);
   const textCount = count - heartCount;
 
-  // 1. Generate Heart Outline
+  // 1. Generate Heart Outline (Border)
   for (let i = 0; i < heartCount; i++) {
     const t = Math.random() * Math.PI * 2;
-    // Heart equation
     const x = 16 * Math.pow(Math.sin(t), 3);
     const y = 13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t);
     
-    // Scale up the heart to be a border
-    positions[i * 3] = x * scale * 0.6;
-    positions[i * 3 + 1] = y * scale * 0.6;
-    positions[i * 3 + 2] = (Math.random() - 0.5) * 2;
+    // Reduced scale to 0.28 for a more balanced, centered look
+    positions[i * 3] = x * scale * 0.28;
+    positions[i * 3 + 1] = y * scale * 0.28;
+    positions[i * 3 + 2] = (Math.random() - 0.5) * 0.8;
   }
 
   // 2. Generate Text inside
   const textPositions = new Float32Array(textCount * 3);
-  generateTextPattern(textPositions, textCount, scale * 0.75, lines);
+  // Adjusted text scale to fit inside the new heart size
+  generateTextPattern(textPositions, textCount, scale * 0.38, lines);
   
   for (let i = 0; i < textCount; i++) {
     const idx = (heartCount + i) * 3;
     positions[idx] = textPositions[i * 3];
-    positions[idx + 1] = textPositions[i * 3 + 1] - 1.0; 
+    positions[idx + 1] = textPositions[i * 3 + 1] - 0.2; // Centered vertically in smaller heart
     positions[idx + 2] = textPositions[i * 3 + 2];
   }
 }

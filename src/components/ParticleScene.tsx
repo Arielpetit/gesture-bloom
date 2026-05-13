@@ -400,15 +400,20 @@ export function ParticleScene({
 
               // Realistic Fireworks Logic
               if (pattern === 'victoryHeart') {
+                // Reset color to base first
+                const colorAttr = (particlesRef.current!.geometry.attributes.color as THREE.BufferAttribute);
+                colorAttr.setXYZ(i, baseColorsRef.current![i * 3], baseColorsRef.current![i * 3 + 1], baseColorsRef.current![i * 3 + 2]);
+
                 // Occasional new burst
-                if (Math.random() > 0.97 && fireworksRef.current.length < 8) {
-                  fireworksRef.current.push({
-                    x: (Math.random() - 0.5) * 60, // Wider range
-                    y: (Math.random() - 0.5) * 30 + 5,
-                    z: (Math.random() - 0.5) * 15,
+                if (Math.random() > 0.96 && fireworksRef.current.length < 15) {
+                  const newFw = {
+                    x: (Math.random() - 0.5) * 16, // Visible X range
+                    y: (Math.random() - 0.5) * 10 + 2, // Visible Y range
+                    z: (Math.random() - 0.5) * 5 - 2, // Visible Z range
                     time: Date.now(),
-                    color: new THREE.Color(['#ffffff', '#ffdd44', '#ff88aa', '#44ffff'][Math.floor(Math.random() * 4)])
-                  });
+                    color: new THREE.Color(['#ffffff', '#ffaa00', '#ff00aa', '#00ffff'][Math.floor(Math.random() * 4)])
+                  };
+                  fireworksRef.current.push(newFw);
                 }
 
                 // Cleanup old fireworks
@@ -417,45 +422,42 @@ export function ParticleScene({
                 // Affect particles near burst centers
                 fireworksRef.current.forEach(fw => {
                   const age = (Date.now() - fw.time) / 1000;
-                  const distSq = 
-                    Math.pow(currentPositionsRef.current![i * 3] - fw.x, 2) +
-                    Math.pow(currentPositionsRef.current![i * 3 + 1] - fw.y, 2);
+                  const dx = currentPositionsRef.current![i * 3] - fw.x;
+                  const dy = currentPositionsRef.current![i * 3 + 1] - fw.y;
+                  const distSq = dx * dx + dy * dy;
                   
-                  if (distSq < 49) { // Even wider range (radius 7)
-                    if (age < 0.1) { // Initial massive pop
+                  if (distSq < 64) { // Range of 8 units
+                    if (age < 0.1) { // Initial pop
                       const angle = Math.random() * Math.PI * 2;
                       const phi = Math.random() * Math.PI;
-                      const speed = 4.0 + Math.random() * 6.0; // Much faster
+                      const speed = 6.0 + Math.random() * 8.0; // Much faster pop
                       
                       velocitiesRef.current![i * 3] += Math.sin(phi) * Math.cos(angle) * speed;
                       velocitiesRef.current![i * 3 + 1] += Math.sin(phi) * Math.sin(angle) * speed;
                       velocitiesRef.current![i * 3 + 2] += Math.cos(phi) * speed;
                     }
                     
-                    // While exploding, ignore target pull and apply gravity + glow
+                    // Flash color
                     if (age < 1.0) {
-                      velocitiesRef.current![i * 3 + 1] -= 0.05; // Stronger gravity
-                      
-                      // Flash white/gold
-                      const flash = Math.max(0, 1.0 - age * 1.2);
-                      const colorAttr = (particlesRef.current!.geometry.attributes.color as THREE.BufferAttribute);
+                      const flash = Math.max(0, 1.0 - age * 0.9);
                       colorAttr.setXYZ(
                         i, 
-                        Math.min(1.0, baseColorsRef.current![i * 3] + fw.color.r * flash),
-                        Math.min(1.0, baseColorsRef.current![i * 3 + 1] + fw.color.g * flash),
-                        Math.min(1.0, baseColorsRef.current![i * 3 + 2] + fw.color.b * flash)
+                        Math.min(1.0, baseColorsRef.current![i * 3] + fw.color.r * flash * 2.5), // Ultra bright
+                        Math.min(1.0, baseColorsRef.current![i * 3 + 1] + fw.color.g * flash * 2.5),
+                        Math.min(1.0, baseColorsRef.current![i * 3 + 2] + fw.color.b * flash * 2.5)
                       );
-                      colorAttr.needsUpdate = true;
-                      
-                      return; // SKIP the target pull below
+                      // Apply extra gravity
+                      velocitiesRef.current![i * 3 + 1] -= 0.12; // Stronger downward pull
                     }
                   }
                 });
                 
+                colorAttr.needsUpdate = true;
+                
                 // Extra shimmer for all particles in victory mode
-                if (Math.random() > 0.98) {
-                   velocitiesRef.current![i * 3] += (Math.random() - 0.5) * 0.4;
-                   velocitiesRef.current![i * 3 + 1] += (Math.random() - 0.5) * 0.4;
+                if (Math.random() > 0.99) {
+                   velocitiesRef.current![i * 3] += (Math.random() - 0.5) * 0.2;
+                   velocitiesRef.current![i * 3 + 1] += (Math.random() - 0.5) * 0.2;
                 }
               }
             }      

@@ -266,6 +266,33 @@ const Index = () => {
   }, [gestureState, stepIndex, soundOn, hasCompletedAll, sequenceIndex]);
 
   useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'Space') {
+        e.preventDefault();
+        const activeStep = storySteps[stepIndex];
+        const isAtEndOfSequence = !Array.isArray(activeStep.particleText) || 
+                                 sequenceIndex === activeStep.particleText.length - 1;
+
+        if (!isAtEndOfSequence) {
+          // Advance sequence
+          setSequenceIndex(idx => idx + 1);
+        } else if (stepIndex < storySteps.length - 1) {
+          // Advance step
+          const nextIdx = stepIndex + 1;
+          setStepIndex(nextIdx);
+          setSequenceIndex(0);
+          gestureBufferRef.current = [];
+          if (nextIdx === storySteps.length - 1) setHasCompletedAll(true);
+          if (!soundOn) void startSound();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [stepIndex, sequenceIndex, soundOn]);
+
+  useEffect(() => {
     return () => {
       musicRef.current?.pause();
       try {
@@ -445,7 +472,7 @@ const Index = () => {
           </div>
         </header>
 
-        {activeStep.image && (
+        {activeStep.image && (activeStep.id !== 'final-narrative' || sequenceIndex === 1) && (
           <div className="pointer-events-none fixed inset-0 z-20 flex flex-col items-center justify-center p-6 pb-48 text-center sm:pb-64">
             <div className="mb-8 w-64 overflow-hidden rounded-3xl border border-white/20 bg-white/[0.04] shadow-[0_28px_90px_rgba(0,0,0,0.55)] backdrop-blur-sm sm:w-80 md:w-96">
               <img src="/portrait.png" alt="Portrait" className="aspect-square w-full object-cover" />
