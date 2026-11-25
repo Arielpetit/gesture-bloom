@@ -68,7 +68,7 @@ export function CameraPreview({ videoRef, handRef }: Props) {
   }, [open, videoRef, handRef]);
 
   return (
-    <div className="pointer-events-auto absolute bottom-4 right-4 z-30 flex flex-col items-end gap-2">
+    <div className="pointer-events-auto absolute bottom-20 right-3 z-30 flex flex-col items-end gap-2 md:bottom-4 md:right-4">
       {open && (
         <canvas
           ref={canvasRef}

@@ -34,6 +34,44 @@ interface ParticleSceneProps {
 const isTextPattern = (pattern: PatternType) => pattern.startsWith('word');
 
 const TRANSITION_SECONDS = 1.5;
+const BURSTS = 6;
+const BURST_LIFE = 1.9;
+const FIREWORK_COLORS = ['#ffffff', '#ffb347', '#ff4fa3', '#5ee7ff', '#ffe66d', '#c77dff'];
+
+// Flat shapes face the camera, hold still and stay readable.
+const isFlatPattern = (pattern: PatternType) => isTextPattern(pattern) || pattern === 'victoryHeart';
+
+const SPARK_VERT = /* glsl */ `
+  uniform float uTime;
+  uniform float uPx;
+  uniform float uOn;
+  uniform vec4 uBursts[${BURSTS}];
+  uniform vec3 uBurstCol[${BURSTS}];
+  attribute vec4 aSpark; // xyz direction * speed, w = slot
+  varying vec3 vCol;
+  varying float vFade;
+  void main() {
+    int slot = int(aSpark.w);
+    vec4 b = uBursts[slot];
+    float age = uTime - b.w;
+    if (age < 0.0 || age > ${BURST_LIFE.toFixed(1)} || uOn <= 0.0) {
+      gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+      gl_PointSize = 0.0;
+      vCol = vec3(0.0);
+      vFade = 0.0;
+      return;
+    }
+    float k = age / ${BURST_LIFE.toFixed(1)};
+    vec3 pos = b.xyz + aSpark.xyz * (1.0 - exp(-age * 3.0)) * 1.25;
+    pos.y -= 0.55 * age * age; // gravity
+    vec4 mv = modelViewMatrix * vec4(pos, 1.0);
+    gl_Position = projectionMatrix * mv;
+    float flicker = 0.75 + 0.25 * sin(uTime * 40.0 + aSpark.x * 90.0);
+    vCol = mix(vec3(1.0), uBurstCol[slot], smoothstep(0.0, 0.25, k)) * (1.6 - k);
+    vFade = pow(1.0 - k, 1.4) * flicker * uOn;
+    gl_PointSize = clamp(0.07 * uPx / max(0.5, -mv.z) * (1.2 - k * 0.6), 1.0, 24.0);
+  }
+`;
 const FOV = 70;
 
 // Each shape gets its own edge hue, so the palette glides when the shape changes.
@@ -256,7 +294,7 @@ export function ParticleScene({
       uSize: { value: 0.085 },
       uPx: { value: 600 },
       uVib: { value: 0.03 },
-      uText: { value: isTextPattern(pattern) ? 1 : 0 },
+      uText: { value: isFlatPattern(pattern) ? 1 : 0 },
       uMotion: { value: 1 },
       uAmbient: { value: 0 },
       uSphere: { value: 0 },
@@ -305,11 +343,51 @@ export function ParticleScene({
     const stars = new THREE.Points(starGeo, starMat);
     scene.add(stars);
 
+    // ---------- fireworks: GPU sparks, one burst slot each, only on the final screen
+    const sparksPerBurst = isCoarse ? 180 : 420;
+    const sparkData = new Float32Array(BURSTS * sparksPerBurst * 4);
+    for (let s = 0; s < BURSTS; s++) {
+      for (let j = 0; j < sparksPerBurst; j++) {
+        const o = (s * sparksPerBurst + j) * 4;
+        const th = Math.random() * Math.PI * 2;
+        const ph = Math.acos(2 * Math.random() - 1);
+        const speed = 1.4 + Math.random() * 1.2;
+        sparkData[o] = Math.sin(ph) * Math.cos(th) * speed;
+        sparkData[o + 1] = Math.sin(ph) * Math.sin(th) * speed;
+        sparkData[o + 2] = Math.cos(ph) * speed * 0.5;
+        sparkData[o + 3] = s;
+      }
+    }
+    const sparkGeo = new THREE.BufferGeometry();
+    sparkGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(BURSTS * sparksPerBurst * 3), 3));
+    sparkGeo.setAttribute('aSpark', new THREE.BufferAttribute(sparkData, 4));
+    const sparkUniforms = {
+      uTime: { value: 0 },
+      uPx: uniforms.uPx,
+      uOn: { value: 0 },
+      uBursts: { value: Array.from({ length: BURSTS }, () => new THREE.Vector4(0, 0, 0, -99)) },
+      uBurstCol: { value: Array.from({ length: BURSTS }, () => new THREE.Color('#ffffff')) },
+    };
+    const sparkMat = new THREE.ShaderMaterial({
+      uniforms: sparkUniforms,
+      vertexShader: SPARK_VERT,
+      fragmentShader: FRAG,
+      transparent: true,
+      depthWrite: false,
+      depthTest: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const sparks = new THREE.Points(sparkGeo, sparkMat);
+    sparks.frustumCulled = false;
+    scene.add(sparks);
+    let nextBurstAt = 0;
+    let burstSlot = 0;
+
     // ---------- state (plain locals: no React in the hot path)
     let currentPattern = pattern;
     let currentText = customText;
     let currentShape: ParticleShape | null = null;
-    let textMode = isTextPattern(pattern);
+    let textMode = isFlatPattern(pattern);
     let halfWidth = halfWidthOf(initialPositions);
     let imgTarget = 0;
     let transition = 0.3;
@@ -401,7 +479,7 @@ export function ParticleScene({
         } else {
           to.set(generatePattern(next, particleCount, 1, text ? text.split('\n') : undefined));
           imgTarget = 0;
-          textMode = isTextPattern(next);
+          textMode = isFlatPattern(next);
         }
         aFrom.needsUpdate = true;
         aTo.needsUpdate = true;
@@ -568,6 +646,25 @@ export function ParticleScene({
       stars.position.x = -camera.position.x * 0.3;
       stars.position.y = -camera.position.y * 0.3;
 
+      // ----- fireworks on the final screen
+      const fireworks = currentPattern === 'victoryHeart' && !currentShape;
+      sparkUniforms.uOn.value += ((fireworks ? 1 : 0) - sparkUniforms.uOn.value) * Math.min(1, 0.08 * k60);
+      sparkUniforms.uTime.value = elapsed;
+      if (fireworks && transition > 0.6 && elapsed >= nextBurstAt) {
+        const fh = Math.tan((FOV * Math.PI) / 360) * camera.position.z;
+        const b = sparkUniforms.uBursts.value[burstSlot];
+        // Mostly around and above the heart, inside the visible frame.
+        b.set(
+          (Math.random() * 2 - 1) * fh * aspect * 0.8,
+          lookY + (Math.random() * 1.3 - 0.35) * fh * 0.75,
+          -1.5 - Math.random() * 2,
+          elapsed,
+        );
+        sparkUniforms.uBurstCol.value[burstSlot].set(FIREWORK_COLORS[Math.floor(Math.random() * FIREWORK_COLORS.length)]);
+        burstSlot = (burstSlot + 1) % BURSTS;
+        nextBurstAt = elapsed + (L.reducedMotion ? 1.4 : 0.35 + Math.random() * 0.5);
+      }
+
       renderer.render(scene, camera);
 
       // Read the drawing buffer in the same task as render, before it is cleared.
@@ -597,6 +694,8 @@ export function ParticleScene({
       material.dispose();
       starGeo.dispose();
       starMat.dispose();
+      sparkGeo.dispose();
+      sparkMat.dispose();
       renderer.dispose();
       renderer.domElement.remove();
     };

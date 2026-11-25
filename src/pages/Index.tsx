@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Camera, Hand, Maximize2, Minimize2, Palette, Pause, Play, RotateCcw, Sparkles, ThumbsUp, Video, Volume2 } from 'lucide-react';
+import { Camera, ChevronLeft, ChevronRight, Hand, Maximize2, Minimize2, Palette, Pause, Play, RotateCcw, Sparkles, ThumbsUp, Video, Volume2 } from 'lucide-react';
 import { PatternType, GestureType, ParticleColor } from '@/types/particle';
 import { PARTICLE_COLORS } from '@/constants/patterns';
 import { useHandTracking, type TrackingMode } from '@/hooks/useHandTracking';
@@ -376,30 +376,18 @@ const Index = () => {
         setCustomShape(null);
         return;
       }
-      if (e.code === 'Space') {
+      if (e.code === 'Space' || e.code === 'ArrowRight' || e.code === 'PageDown') {
         e.preventDefault();
-        const activeStep = storySteps[stepIndex];
-        const isAtEndOfSequence = !Array.isArray(activeStep.particleText) || 
-                                 sequenceIndex === activeStep.particleText.length - 1;
-
-        if (!isAtEndOfSequence) {
-          // Advance sequence
-          setSequenceIndex(idx => idx + 1);
-        } else if (stepIndex < storySteps.length - 1) {
-          // Advance step
-          const nextIdx = stepIndex + 1;
-          setStepIndex(nextIdx);
-          setSequenceIndex(0);
-          gestureBufferRef.current = [];
-          if (nextIdx === storySteps.length - 1) setHasCompletedAll(true);
-          if (!soundOn) void startSound();
-        }
+        navRef.current.next();
+      } else if (e.code === 'ArrowLeft' || e.code === 'PageUp') {
+        e.preventDefault();
+        navRef.current.prev();
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [stepIndex, sequenceIndex, soundOn, stage, customShape]);
+  }, [stage, customShape]);
 
   useEffect(() => {
     return () => {
@@ -542,13 +530,49 @@ const Index = () => {
 
   const handleScene = useCallback((handle: SceneHandle | null) => setScene(handle), []);
 
-  const advanceManually = () => {
-    haptic(30);
-    void startSound();
+  const lastStep = storySteps.length - 1;
+  const partCount = Array.isArray(activeStep.particleText) ? activeStep.particleText.length : 1;
+  const canGoNext = sequenceIndex < partCount - 1 || stepIndex < lastStep;
+  const canGoPrev = sequenceIndex > 0 || stepIndex > 0;
+
+  /** Next text part of this screen, else the next screen. */
+  const goNext = () => {
+    if (!canGoNext) return;
+    haptic(20);
+    setCustomShape(null);
     lastAdvanceRef.current = Date.now();
     gestureBufferRef.current = [];
-    setStepIndex(current => Math.min(current + 1, storySteps.length - 1));
+    if (sequenceIndex < partCount - 1) {
+      setSequenceIndex(i => i + 1);
+      return;
+    }
+    const nextIdx = stepIndex + 1;
+    setStepIndex(nextIdx);
+    setSequenceIndex(0);
+    if (nextIdx === lastStep) setHasCompletedAll(true);
+    if (!soundOn) void startSound();
   };
+
+  /** Previous text part of this screen, else the previous screen. */
+  const goPrev = () => {
+    if (!canGoPrev) return;
+    haptic(20);
+    setCustomShape(null);
+    lastAdvanceRef.current = Date.now();
+    gestureBufferRef.current = [];
+    if (sequenceIndex > 0) {
+      setSequenceIndex(i => i - 1);
+      return;
+    }
+    setStepIndex(i => i - 1);
+    setSequenceIndex(0);
+  };
+
+  // Keyboard handler is registered once; this keeps it calling the latest functions.
+  const navRef = useRef({ next: goNext, prev: goPrev });
+  navRef.current = { next: goNext, prev: goPrev };
+
+  const advanceManually = goNext;
 
   const progress = useMemo(() => ((stepIndex + 1) / storySteps.length) * 100, [stepIndex]);
 
@@ -675,8 +699,11 @@ const Index = () => {
         )}
 
         {/* Floating Next Gesture Hint - only show if sequence done AND no sign detected yet */}
-        {isAtEndOfSequence && nextStep && (!gestureState.isDetected || gestureState.gesture === 'none') && (
-          <div className="pointer-events-none fixed bottom-12 left-1/2 z-40 -translate-x-1/2 animate-in fade-in slide-in-from-bottom-8 duration-1000">
+        {isAtEndOfSequence && nextStep && !customShape && (!gestureState.isDetected || gestureState.gesture === 'none') && (
+          <div className={cn(
+            "pointer-events-none fixed bottom-24 left-1/2 z-40 -translate-x-1/2 animate-in fade-in slide-in-from-bottom-8 duration-1000",
+            sidebarOpen && "max-md:hidden"
+          )}>
             <div className="flex flex-col items-center gap-4">
               <div className="flex h-20 w-20 items-center justify-center rounded-full border-2 border-white/20 bg-white/[0.08] text-4xl shadow-[0_0_40px_rgba(255,255,255,0.15)] backdrop-blur-xl">
                 {nextStep.signIcon}
@@ -689,6 +716,35 @@ const Index = () => {
             </div>
           </div>
         )}
+
+        <nav
+          aria-label="Story navigation"
+          className={cn(
+            "fixed bottom-[max(1rem,env(safe-area-inset-bottom))] left-1/2 z-40 flex -translate-x-1/2 items-center gap-1 rounded-full border border-white/15 bg-black/55 p-1 backdrop-blur-md",
+            sidebarOpen && "max-md:hidden md:left-[calc(50%+10.75rem)]"
+          )}
+        >
+          <button
+            onClick={goPrev}
+            disabled={!canGoPrev}
+            aria-label="Previous"
+            className="inline-flex h-11 w-11 items-center justify-center rounded-full text-white/80 transition hover:bg-white/10 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-white disabled:opacity-30 disabled:hover:bg-transparent"
+          >
+            <ChevronLeft className="h-5 w-5" aria-hidden />
+          </button>
+          <span className="min-w-[4.5rem] text-center text-xs font-semibold tabular-nums text-white/70" aria-live="polite">
+            {stepIndex + 1} / {storySteps.length}
+            {partCount > 1 && <span className="text-white/40"> · {sequenceIndex + 1}/{partCount}</span>}
+          </span>
+          <button
+            onClick={goNext}
+            disabled={!canGoNext}
+            aria-label="Next"
+            className="inline-flex h-11 w-11 items-center justify-center rounded-full bg-white text-black transition hover:scale-105 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white disabled:opacity-30 disabled:hover:scale-100"
+          >
+            <ChevronRight className="h-5 w-5" aria-hidden />
+          </button>
+        </nav>
 
         <aside className={cn(
           "fixed bottom-4 left-4 right-4 z-30 max-h-[72vh] overflow-y-auto overscroll-contain rounded-2xl border border-white/12 bg-black/55 p-4 text-left shadow-[0_28px_90px_rgba(0,0,0,0.55)] backdrop-blur-xl transition-all duration-500 ease-in-out md:bottom-6 md:left-6 md:top-6 md:w-80 md:overflow-y-auto",
