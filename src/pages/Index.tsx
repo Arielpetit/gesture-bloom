@@ -1,9 +1,18 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { Camera, Hand, Maximize2, Minimize2, Palette, Pause, Play, RotateCcw, Sparkles, ThumbsUp, Volume2 } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Camera, Hand, Maximize2, Minimize2, Palette, Pause, Play, RotateCcw, Sparkles, ThumbsUp, Video, Volume2 } from 'lucide-react';
 import { PatternType, GestureType, ParticleColor } from '@/types/particle';
 import { PARTICLE_COLORS } from '@/constants/patterns';
-import { useHandTracking } from '@/hooks/useHandTracking';
-import { ParticleScene } from '@/components/ParticleScene';
+import { useHandTracking, type TrackingMode } from '@/hooks/useHandTracking';
+import { useReducedMotion } from '@/hooks/useReducedMotion';
+import { ParticleScene, type SceneHandle } from '@/components/ParticleScene';
+import { Landing } from '@/components/Landing';
+import { GestureFeedback } from '@/components/GestureFeedback';
+import { RecordControls } from '@/components/RecordControls';
+import { CreatePanel } from '@/components/CreatePanel';
+import { MusicPicker } from '@/components/MusicPicker';
+import { BUILT_IN_TRACKS, type Track } from '@/constants/tracks';
+import { shapeFromImage, type ParticleShape } from '@/utils/shapeSampling';
+import { CameraPreview } from '@/components/CameraPreview';
 import { cn } from '@/lib/utils';
 
 declare global {
@@ -57,7 +66,7 @@ const storySteps: StoryStep[] = [
     pattern: 'wordArrival',
     label: '1',
     particleText: [
-      { text: 'Parfois… certaines personnes arrivent dans nos vies sans prévenir.', delay: 7000 },
+      { text: 'Parfois… certaines personnes arrivent dans nos vies sans prévenir.', delay: 9000 },
       { text: 'Et sans qu’on s’en rende compte… elles commencent à prendre une place importante' }
     ],
     guide: 'Make a peace sign to reveal the story.',
@@ -84,8 +93,8 @@ const storySteps: StoryStep[] = [
     pattern: 'wordSimple',
     label: '3',
     particleText: [
-      { text: 'J’aime assez bien les moments avec toi.', delay: 7000 },
-      { text: 'J’aime ton énergie.', delay: 7000 },
+      { text: 'J’aime assez bien les moments avec toi.', delay: 9000 },
+      { text: 'J’aime ton énergie.', delay: 9000 },
       { text: 'Et surtout… j’aime la personne que tu es' }
     ],
     guide: 'Make the rock sign.',
@@ -100,8 +109,8 @@ const storySteps: StoryStep[] = [
     pattern: 'wordEnergy',
     label: '4',
     particleText: [
-      { text: 'Je pouvais t’offrir quelque chose d’assez classique pour symboliser le moment…', delay: 7000 },
-      { text: 'mais je voulais surtout créer quelque chose qui vienne de moi', delay: 7000 },
+      { text: 'Je pouvais t’offrir quelque chose d’assez classique pour symboliser le moment…', delay: 9000 },
+      { text: 'mais je voulais surtout créer quelque chose qui vienne de moi', delay: 9000 },
       { text: 'Je ne veux pas être assez long…' }
     ],
     guide: 'Point one finger up.',
@@ -116,7 +125,7 @@ const storySteps: StoryStep[] = [
     pattern: 'wordFromMe',
     label: '5',
     particleText: [
-      { text: 'Alors Marylin ❤️', delay: 7000 },
+      { text: 'Alors Marylin ❤️', delay: 9000 },
       { text: 'Veux-tu etre ma petite amie ?' }
     ],
     guide: 'Fais le doigt d’honneur pour commencer le message final.',
@@ -138,6 +147,40 @@ const storySteps: StoryStep[] = [
   },
 ];
 
+const haptic = (ms = 18) => {
+  try {
+    navigator.vibrate?.(ms);
+  } catch {
+    /* not supported */
+  }
+};
+
+const DEMO_STEP_MS = 7000;
+const TRACK_KEY = 'gesture-bloom:track';
+const MUSIC_VOLUME = 0.48;
+
+const savedTrackId = () => {
+  try {
+    return localStorage.getItem(TRACK_KEY);
+  } catch {
+    return null;
+  }
+};
+
+/** Fade an element's volume to `to` over `ms`, then resolve. */
+const fadeVolume = (el: HTMLAudioElement, to: number, ms: number) =>
+  new Promise<void>(resolve => {
+    const from = el.volume;
+    const start = performance.now();
+    const step = (now: number) => {
+      const k = Math.min(1, (now - start) / ms);
+      el.volume = from + (to - from) * k;
+      if (k < 1) requestAnimationFrame(step);
+      else resolve();
+    };
+    requestAnimationFrame(step);
+  });
+
 const colorChoices = [
   getColor('white'),
   getColor('cyan'),
@@ -154,15 +197,29 @@ const Index = () => {
   const [hasCompletedAll, setHasCompletedAll] = useState(false);
   const [soundOn, setSoundOn] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth >= 768);
   const [particleCount, setParticleCount] = useState(4200);
   const [selectedColor, setSelectedColor] = useState<ParticleColor>(getColor('coral'));
   const [customColor, setCustomColor] = useState(getColor('white').color);
-  const { gestureState, isLoading, error, restart } = useHandTracking();
+  const [stage, setStage] = useState<'landing' | 'story'>('landing');
+  const [trackingMode, setTrackingMode] = useState<TrackingMode>('off');
+  const [customShape, setCustomShape] = useState<ParticleShape | null>(null);
+  const [scene, setScene] = useState<SceneHandle | null>(null);
+  const [dropActive, setDropActive] = useState(false);
+  const reducedMotion = useReducedMotion();
+  const { gestureState, handRef, videoRef, isLoading, error, restart } = useHandTracking(trackingMode);
+  const isDemo = trackingMode === 'demo';
   const gestureBufferRef = useRef<GestureType[]>([]);
   const lastAdvanceRef = useRef(0);
   const audioRef = useRef<AudioContext | null>(null);
   const musicRef = useRef<HTMLAudioElement | null>(null);
+  const [customTrack, setCustomTrack] = useState<Track | null>(null);
+  const tracks = useMemo(() => (customTrack ? [...BUILT_IN_TRACKS, customTrack] : BUILT_IN_TRACKS), [customTrack]);
+  const [trackId, setTrackId] = useState(
+    () => BUILT_IN_TRACKS.find(t => t.id === savedTrackId())?.id ?? BUILT_IN_TRACKS[0].id
+  );
+  // Read inside startSound, which effects capture once: a ref always has the latest pick.
+  const trackSrcRef = useRef(BUILT_IN_TRACKS.find(t => t.id === trackId)?.src ?? BUILT_IN_TRACKS[0].src);
   const oscillatorRef = useRef<OscillatorNode | null>(null);
   const gainRef = useRef<GainNode | null>(null);
 
@@ -172,7 +229,8 @@ const Index = () => {
 
   useEffect(() => {
     const isSmallScreen = window.matchMedia('(max-width: 760px)').matches;
-    setParticleCount(isSmallScreen ? 10000 : 16000);
+    const lowEnd = (navigator.hardwareConcurrency || 4) <= 4;
+    setParticleCount(isSmallScreen ? (lowEnd ? 5000 : 7000) : 18000);
   }, []);
 
   useEffect(() => {
@@ -200,14 +258,12 @@ const Index = () => {
             setSequenceIndex(idx => idx + 1);
           }, currentPart.delay);
         } else if (activeStep.autoNext) {
-          console.log(`[Timer] Auto-advancing from step ${stepIndex} in ${currentPart.delay}ms`);
           timer = window.setTimeout(() => {
             setStepIndex(prev => Math.min(storySteps.length - 1, prev + 1));
           }, currentPart.delay);
         }
       }
     } else if (activeStep.autoNext && activeStep.delay) {
-      console.log(`[Timer] Auto-advancing from step ${stepIndex} in ${activeStep.delay}ms`);
       timer = window.setTimeout(() => {
         setStepIndex(prev => Math.min(storySteps.length - 1, prev + 1));
       }, activeStep.delay);
@@ -246,6 +302,7 @@ const Index = () => {
           setSequenceIndex(0);
           gestureBufferRef.current = [];
           setStepIndex(nextStepIdx);
+          haptic(30);
           if (nextStepIdx === storySteps.length - 1) setHasCompletedAll(true);
           if (!soundOn) void startSound();
         }
@@ -265,8 +322,60 @@ const Index = () => {
     }
   }, [gestureState, stepIndex, soundOn, hasCompletedAll, sequenceIndex]);
 
+  // Demo mode walks through the story by itself.
+  useEffect(() => {
+    if (!isDemo || stage !== 'story' || customShape) return;
+    const step = storySteps[stepIndex];
+    const atEnd = !Array.isArray(step.particleText) || sequenceIndex === step.particleText.length - 1;
+    if (!atEnd || stepIndex >= storySteps.length - 1) return;
+    const t = window.setTimeout(() => {
+      setStepIndex(i => Math.min(i + 1, storySteps.length - 1));
+    }, DEMO_STEP_MS);
+    return () => window.clearTimeout(t);
+  }, [isDemo, stage, stepIndex, sequenceIndex, customShape]);
+
+  // Drop an image anywhere to turn it into particles.
+  useEffect(() => {
+    const hasFiles = (e: DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes('Files');
+    const onOver = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      setDropActive(true);
+    };
+    const onLeave = (e: DragEvent) => {
+      if (e.relatedTarget === null) setDropActive(false);
+    };
+    const onDrop = async (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      setDropActive(false);
+      const file = e.dataTransfer?.files?.[0];
+      if (!file) return;
+      try {
+        setCustomShape(await shapeFromImage(file));
+        setStage('story');
+      } catch {
+        /* not an image: ignore */
+      }
+    };
+    window.addEventListener('dragover', onOver);
+    window.addEventListener('dragleave', onLeave);
+    window.addEventListener('drop', onDrop);
+    return () => {
+      window.removeEventListener('dragover', onOver);
+      window.removeEventListener('dragleave', onLeave);
+      window.removeEventListener('drop', onDrop);
+    };
+  }, []);
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (stage !== 'story') return;
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (e.code === 'Escape' && customShape) {
+        setCustomShape(null);
+        return;
+      }
       if (e.code === 'Space') {
         e.preventDefault();
         const activeStep = storySteps[stepIndex];
@@ -290,7 +399,7 @@ const Index = () => {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [stepIndex, sequenceIndex, soundOn]);
+  }, [stepIndex, sequenceIndex, soundOn, stage, customShape]);
 
   useEffect(() => {
     return () => {
@@ -298,7 +407,8 @@ const Index = () => {
       try {
         oscillatorRef.current?.stop();
       } catch {
-      }
+      /* already stopped or unsupported */
+    }
       audioRef.current?.close();
     };
   }, []);
@@ -310,6 +420,7 @@ const Index = () => {
     try {
       oscillatorRef.current?.stop();
     } catch {
+      /* already stopped or unsupported */
     }
 
     oscillatorRef.current = null;
@@ -323,14 +434,16 @@ const Index = () => {
     if (soundOn) return;
 
     try {
-      const music = new Audio('/song.mp3');
+      const music = new Audio(trackSrcRef.current);
       music.loop = true;
-      music.volume = 0.48;
+      music.volume = 0;
       await music.play();
+      void fadeVolume(music, MUSIC_VOLUME, 600);
       musicRef.current = music;
       setSoundOn(true);
       return;
     } catch {
+      /* already stopped or unsupported */
     }
 
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
@@ -360,6 +473,49 @@ const Index = () => {
     setSoundOn(true);
   };
 
+  const selectTrack = async (track: Track) => {
+    setTrackId(track.id);
+    trackSrcRef.current = track.src;
+    if (!track.src.startsWith('blob:')) {
+      try {
+        localStorage.setItem(TRACK_KEY, track.id);
+      } catch {
+        /* storage blocked: choice lasts for this visit only */
+      }
+    }
+
+    const current = musicRef.current;
+    if (!current || !soundOn) return;
+    // Crossfade: fade the old song out, then bring the new one in.
+    await fadeVolume(current, 0, 400);
+    current.pause();
+    const next = new Audio(track.src);
+    next.loop = true;
+    next.volume = 0;
+    try {
+      await next.play();
+      musicRef.current = next;
+      void fadeVolume(next, MUSIC_VOLUME, 600);
+    } catch {
+      musicRef.current = null;
+      setSoundOn(false);
+    }
+  };
+
+  const chooseOwnSong = (file: File) => {
+    if (customTrack) URL.revokeObjectURL(customTrack.src);
+    const track: Track = {
+      id: 'custom',
+      name: file.name.replace(/\.[^.]+$/, ''),
+      artist: 'From your device',
+      src: URL.createObjectURL(file),
+    };
+    setCustomTrack(track);
+    void selectTrack(track).then(() => {
+      if (!soundOn) void startSound();
+    });
+  };
+
   const toggleSound = () => {
     if (soundOn) {
       stopSound();
@@ -378,7 +534,16 @@ const Index = () => {
     await document.documentElement.requestFullscreen();
   };
 
+  const begin = (mode: TrackingMode) => {
+    haptic();
+    setTrackingMode(mode);
+    setStage('story');
+  };
+
+  const handleScene = useCallback((handle: SceneHandle | null) => setScene(handle), []);
+
   const advanceManually = () => {
+    haptic(30);
     void startSound();
     lastAdvanceRef.current = Date.now();
     gestureBufferRef.current = [];
@@ -409,27 +574,52 @@ const Index = () => {
   return (
     <div className="relative min-h-screen w-full overflow-hidden bg-[#030508] text-white">
       <ParticleScene
-        pattern={activeStep.pattern}
+        pattern={stage === 'landing' ? 'wordSimple' : activeStep.pattern}
         color={selectedColor}
         gestureState={gestureState}
+        handRef={handRef}
         particleCount={particleCount}
-        isImageVisible={!!activeStep.image}
-        customText={typeof activeStep.particleText === 'string' 
-          ? activeStep.particleText 
-          : (activeStep.particleText[sequenceIndex]?.text || '')}
+        isImageVisible={stage === 'story' && !!activeStep.image}
+        customText={stage === 'landing'
+          ? (window.innerWidth < window.innerHeight ? 'Gesture\nBloom' : 'Gesture Bloom')
+          : typeof activeStep.particleText === 'string'
+            ? activeStep.particleText
+            : (activeStep.particleText[sequenceIndex]?.text || '')}
+        customShape={stage === 'story' ? customShape : null}
+        reducedMotion={reducedMotion}
+        onReady={handleScene}
       />
+
+      {trackingMode === 'camera' && <CameraPreview videoRef={videoRef} handRef={handRef} />}
+
+      <GestureFeedback
+        gesture={gestureState.gesture}
+        isDetected={gestureState.isDetected}
+        watching={stage === 'story' && trackingMode === 'camera' && !isLoading && !error}
+      />
+
+      {dropActive && (
+        <div className="pointer-events-none fixed inset-4 z-50 flex items-center justify-center rounded-3xl border-2 border-dashed border-white/40 bg-black/40 text-sm font-semibold text-white backdrop-blur-sm">
+          Drop the image to turn it into particles
+        </div>
+      )}
+
+      {stage === 'landing' && (
+        <Landing onStartCamera={() => begin('camera')} onStartDemo={() => begin('demo')} />
+      )}
 
       <div className="pointer-events-none absolute inset-0 z-10 bg-[radial-gradient(circle_at_55%_50%,transparent_0%,rgba(3,5,8,0.08)_38%,rgba(3,5,8,0.62)_82%)]" />
       <div className="pointer-events-none absolute inset-0 z-10 proposal-grain opacity-[0.18]" />
 
+      {stage === 'story' && (
       <main className="relative z-20 flex min-h-screen flex-col px-4 py-4 md:px-6 md:py-6">
         <header className={cn(
           "flex items-center justify-between gap-4 transition-all duration-500",
           sidebarOpen ? "md:ml-[21.5rem]" : "md:ml-0"
         )}>
           <div>
-            <div className="text-[10px] font-semibold uppercase tracking-[0.32em] text-white/45">Gesture Bloom</div>
-            <div className="mt-1 h-1 w-36 overflow-hidden rounded-full bg-white/10">
+            <div className="hidden whitespace-nowrap text-[10px] sm:block font-semibold uppercase tracking-[0.32em] text-white/45">Gesture Bloom</div>
+            <div className="mt-1 h-1 w-16 overflow-hidden sm:w-36 rounded-full bg-white/10">
               <div
                 className="h-full rounded-full bg-white transition-all duration-700"
                 style={{ width: `${progress}%` }}
@@ -437,30 +627,33 @@ const Index = () => {
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 sm:gap-2">
             {!sidebarOpen && (
               <button
                 onClick={() => setSidebarOpen(true)}
-                className="pointer-events-auto inline-flex h-11 items-center gap-2 rounded-full border border-white/15 bg-white/[0.06] px-4 text-sm font-medium text-white/70 backdrop-blur-md transition hover:border-white/35 hover:text-white"
+                aria-label="Open settings"
+                className="pointer-events-auto inline-flex h-11 items-center gap-2 rounded-full border border-white/15 bg-white/[0.06] px-3.5 sm:px-4 text-sm font-medium text-white/70 backdrop-blur-md transition hover:border-white/35 hover:text-white"
               >
                 <Palette className="h-4 w-4" />
                 <span className="hidden sm:inline">Settings</span>
               </button>
             )}
 
+            <RecordControls scene={scene} audio={musicRef.current} />
+
             <button
               onClick={toggleFullscreen}
-              className="pointer-events-auto inline-flex h-11 items-center gap-2 rounded-full border border-rose-400/40 bg-rose-500/10 px-4 text-sm font-bold text-rose-100 backdrop-blur-md transition hover:border-rose-400/60 hover:bg-rose-500/20 shadow-[0_0_20px_rgba(244,63,94,0.15)]"
+              className="pointer-events-auto inline-flex h-11 items-center gap-2 rounded-full border border-rose-400/40 bg-rose-500/10 px-3.5 sm:px-4 text-sm font-bold text-rose-100 backdrop-blur-md transition hover:border-rose-400/60 hover:bg-rose-500/20 shadow-[0_0_20px_rgba(244,63,94,0.15)]"
               aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
             >
               {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
-              <span>{isFullscreen ? 'Exit Full' : 'Go Fullscreen'}</span>
+              <span className="hidden sm:inline">{isFullscreen ? 'Exit Full' : 'Go Fullscreen'}</span>
             </button>
 
             <button
               onClick={toggleSound}
               className={cn(
-                'pointer-events-auto inline-flex h-11 items-center gap-2 rounded-full border border-white/15 bg-white/[0.06] px-4 text-sm font-medium text-white/70 backdrop-blur-md transition hover:border-white/35 hover:text-white',
+                'pointer-events-auto inline-flex h-11 items-center gap-2 rounded-full border border-white/15 bg-white/[0.06] px-3.5 sm:px-4 text-sm font-medium text-white/70 backdrop-blur-md transition hover:border-white/35 hover:text-white',
                 soundOn && 'border-rose-300/60 text-rose-100 shadow-[0_0_24px_rgba(251,113,133,0.28)]'
               )}
               aria-label={soundOn ? 'Stop music' : 'Play music'}
@@ -498,7 +691,7 @@ const Index = () => {
         )}
 
         <aside className={cn(
-          "fixed bottom-4 left-4 right-4 z-30 rounded-2xl border border-white/12 bg-black/55 p-4 text-left shadow-[0_28px_90px_rgba(0,0,0,0.55)] backdrop-blur-xl transition-all duration-500 ease-in-out md:bottom-6 md:left-6 md:top-6 md:w-80 md:overflow-y-auto",
+          "fixed bottom-4 left-4 right-4 z-30 max-h-[72vh] overflow-y-auto overscroll-contain rounded-2xl border border-white/12 bg-black/55 p-4 text-left shadow-[0_28px_90px_rgba(0,0,0,0.55)] backdrop-blur-xl transition-all duration-500 ease-in-out md:bottom-6 md:left-6 md:top-6 md:w-80 md:overflow-y-auto",
           !sidebarOpen && "pointer-events-none -translate-x-[120%] opacity-0 md:right-auto"
         )}>
           <div className="mb-5 flex items-center justify-between gap-3">
@@ -555,6 +748,16 @@ const Index = () => {
             ))}
           </div>
 
+          <MusicPicker
+            tracks={tracks}
+            selectedId={trackId}
+            playing={soundOn}
+            onSelect={track => void selectTrack(track)}
+            onFile={chooseOwnSong}
+          />
+
+          <CreatePanel shape={customShape} onShape={setCustomShape} />
+
           <div className="mb-4 rounded-xl border border-white/10 bg-white/[0.04] p-3">
             <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-white">
               <Palette className="h-4 w-4" />
@@ -589,7 +792,12 @@ const Index = () => {
           </div>
 
           <div className="mb-3 flex min-h-10 items-center justify-center gap-2 rounded-full border border-white/12 bg-black/28 px-3 py-2 text-xs text-white/60">
-            {isLoading ? (
+            {isDemo ? (
+              <>
+                <Play className="h-4 w-4" />
+                Demo mode: a virtual hand is playing
+              </>
+            ) : isLoading ? (
               <>
                 <Camera className="h-4 w-4 animate-pulse" />
                 Preparing camera...
@@ -620,11 +828,11 @@ const Index = () => {
           </div>
 
           <button
-            onClick={restart}
+            onClick={() => (trackingMode === 'camera' ? void restart() : setTrackingMode('camera'))}
             className="mb-3 inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-full border border-white/12 bg-white/[0.06] px-4 text-xs font-semibold text-white/70 transition hover:border-white/30 hover:text-white"
           >
-            <RotateCcw className="h-4 w-4" />
-            Restart camera
+            {trackingMode === 'camera' ? <RotateCcw className="h-4 w-4" /> : <Video className="h-4 w-4" />}
+            {trackingMode === 'camera' ? 'Restart camera' : 'Switch to camera'}
           </button>
 
           {activeStep.mode !== 'final' && (
@@ -638,6 +846,7 @@ const Index = () => {
           )}
         </aside>
       </main>
+      )}
     </div>
   );
 };

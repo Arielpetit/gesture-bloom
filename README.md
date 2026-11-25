@@ -1,73 +1,73 @@
-# Welcome to your Lovable project
+# Gesture Bloom
 
-## Project info
+Shape thousands of glowing particles with your bare hands, right in the browser.
+Webcam hand tracking (MediaPipe) drives shape, size and rotation of a GPU-animated particle cloud.
+No camera? Watch the demo, or use touch and mouse.
 
-**URL**: https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID
+**Live:** _add your deploy URL here_
 
-## How can I edit this code?
+![Gesture Bloom demo](docs/demo.gif)
 
-There are several ways of editing your application.
+## Features
 
-**Use Lovable**
+- **Hand control.** Open and close your hand to grow and shrink the cloud. Move it to rotate, repel and swirl particles.
+- **Gesture story.** Each sign (peace, call me, rock, pointing, thumbs up…) moves the story forward, with a ring and screen-reader announcement when a gesture is recognised.
+- **Make your own.** Type a word or drop an image: the particles reform into it, and images keep their colors.
+- **Record and share.** One tap for a PNG, or a 10-second clip (with music if playing). Phones open the share sheet.
+- **Demo mode.** A virtual hand plays the whole experience without a camera.
+- **Installable and offline.** PWA with a service worker. MediaPipe is self-hosted, so nothing loads from a CDN.
+- **Accessible.** Keyboard control (Space to advance, Esc to leave a custom shape), `prefers-reduced-motion` support, live region for gestures.
 
-Simply visit the [Lovable Project](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and start prompting.
-
-Changes made via Lovable will be committed automatically to this repo.
-
-**Use your preferred IDE**
-
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
-
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
-
-Follow these steps:
+## Run locally
 
 ```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
-
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
-
-# Step 3: Install the necessary dependencies.
-npm i
-
-# Step 4: Start the development server with auto-reloading and an instant preview.
-npm run dev
+npm install
+npm run dev        # http://localhost:8080
 ```
 
-**Edit a file directly in GitHub**
+The camera works only on `localhost` or HTTPS.
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+## Scripts
 
-**Use GitHub Codespaces**
+| Script | What it does |
+| --- | --- |
+| `npm run dev` | Dev server with hot reload |
+| `npm run build` | Production build into `dist/` |
+| `npm run preview` | Serve the production build |
+| `npm test` | Unit tests (Vitest) for gesture detection |
+| `npm run lint` / `npm run typecheck` | ESLint and TypeScript checks |
 
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
+`dev` and `build` first copy the MediaPipe runtime from `node_modules` into `public/mediapipe` (`scripts/copy-mediapipe.mjs`).
 
-## What technologies are used for this project?
+## Gestures
 
-This project is built with:
+| Gesture | Effect |
+| --- | --- |
+| Open hand / fist | Expand / contract |
+| 👌 OK | Start the story |
+| ✌️ Peace, 🤙 Call me, 🤘 Rock, ☝️ Pointing, 🖕, 👍 | Next chapter |
+| Move hand | Rotate, repel and swirl |
 
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
+## Deploy
 
-## How can I deploy this project?
+Both configs are included. Pick one:
 
-Simply open [Lovable](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and click on Share -> Publish.
+- **Vercel:** import the repo; `vercel.json` sets caching and the camera permission policy.
+- **Netlify:** import the repo; `netlify.toml` does the same.
 
-## Can I connect a custom domain to my Lovable project?
+Then put the URL at the top of this README. To make the GIF, start Demo mode, press the record button, and convert the clip:
 
-Yes, you can!
+```sh
+ffmpeg -i gesture-bloom.webm -vf "fps=15,scale=640:-1:flags=lanczos" -loop 0 docs/demo.gif
+```
 
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
+## How it stays light
 
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+- All particle motion, transitions and colors run in a vertex shader. JavaScript updates a few uniforms per frame (~1 ms).
+- Hand landmarks reach the renderer through a ref, so React re-renders only when the gesture changes.
+- Particle count adapts: 18k desktop, 5–7k phones. Resolution drops by itself on slow devices.
+- Hand tracking loads only after you choose the camera. Phones use the lite model at ~24 fps. It pauses when the tab is hidden.
+
+## Stack
+
+Vite, React, TypeScript, Three.js (custom shaders), MediaPipe Hands, Tailwind CSS, Vitest.

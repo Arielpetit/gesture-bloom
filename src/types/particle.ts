@@ -13,9 +13,10 @@ export type PatternType =
   | 'wordSimple'
   | 'wordEnergy'
   | 'wordFromMe'
-  | 'wordQuestion';
+  | 'wordQuestion'
+  | 'victoryHeart';
 
-export type GestureType = 'none' | 'open' | 'fist' | 'thumbUp' | 'peace' | 'pointing' | 'rock' | 'iLoveYou' | 'callMe' | 'middleFinger';
+export type GestureType = 'none' | 'open' | 'fist' | 'thumbUp' | 'peace' | 'pointing' | 'rock' | 'iLoveYou' | 'callMe' | 'middleFinger' | 'okSign';
 
 export interface PatternOption {
   id: PatternType;

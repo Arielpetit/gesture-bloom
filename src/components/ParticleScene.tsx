@@ -1,640 +1,622 @@
-import { useEffect, useRef, useCallback, useState } from 'react';
+import { useEffect, useRef, MutableRefObject } from 'react';
 import * as THREE from 'three';
 import { PatternType, ParticleColor, HandGestureState } from '@/types/particle';
 import { generatePattern } from '@/utils/particlePatterns';
+import type { ParticleShape } from '@/utils/shapeSampling';
+
+export interface HandSnapshot {
+  isDetected: boolean;
+  openness: number;
+  landmarks?: { x: number; y: number; z: number }[];
+}
+
+export interface SceneHandle {
+  canvas: HTMLCanvasElement;
+  /** PNG of the next rendered frame. */
+  screenshot: () => Promise<Blob | null>;
+}
 
 interface ParticleSceneProps {
   pattern: PatternType;
   color: ParticleColor;
   gestureState: HandGestureState;
+  /** Per-frame hand data, read without React re-renders. Falls back to gestureState. */
+  handRef?: MutableRefObject<HandSnapshot>;
   particleCount?: number;
   isImageVisible?: boolean;
-  onRotationChange?: (rotation: { x: number; y: number }, isGrabbing: boolean) => void;
   customText?: string;
+  /** User-made shape (typed word or dropped image). Overrides pattern while set. */
+  customShape?: ParticleShape | null;
+  reducedMotion?: boolean;
+  onReady?: (handle: SceneHandle | null) => void;
 }
 
 const isTextPattern = (pattern: PatternType) => pattern.startsWith('word');
+
+const TRANSITION_SECONDS = 1.5;
+const FOV = 70;
+
+// Each shape gets its own edge hue, so the palette glides when the shape changes.
+const PATTERN_HUE_SHIFT: Partial<Record<PatternType, number>> = {
+  heart: -0.06,
+  victoryHeart: 0.08,
+  galaxy: 0.16,
+  helix: 0.12,
+  sphere: 0.1,
+  ambient: 0.2,
+};
+
+const VERT = /* glsl */ `
+  uniform float uTime;
+  uniform float uT;
+  uniform float uScale;
+  uniform float uSize;
+  uniform float uPx;
+  uniform float uVib;
+  uniform float uText;
+  uniform float uMotion;
+  uniform float uAmbient;
+  uniform float uSphere;
+  uniform float uHasHand;
+  uniform float uImgMix;
+  uniform float uRadius;
+  uniform vec3  uHand;
+  uniform vec3  uColCore;
+  uniform vec3  uColEdge;
+  attribute vec3 aFrom;
+  attribute vec3 aTo;
+  attribute vec4 aSeed;
+  attribute vec3 aImg;
+  varying vec3 vCol;
+  varying float vFade;
+
+  void main() {
+    // ---- scatter -> reform transition, fully on the GPU
+    vec3 dir = aSeed.xyz * 2.0 - 1.0;
+    vec3 scatter = normalize(dir + 1e-4) * (8.0 + aSeed.w * 12.0);
+    float a = clamp(uT / 0.3, 0.0, 1.0);
+    a = 1.0 - pow(1.0 - a, 3.0);
+    float stag = aSeed.w * 0.12;
+    float b = clamp((uT - 0.3 - stag) / (0.7 - stag), 0.0, 1.0);
+    b = 1.0 - pow(1.0 - b, 4.0);
+    vec3 p = uT < 0.3 ? mix(aFrom, scatter, a) : mix(scatter, aTo, b);
+    vec3 rest = p;
+
+    float act = sin(clamp(uT, 0.0, 1.0) * 3.14159);
+    float ang = uTime * 3.0 + aSeed.x * 6.2831;
+    p.xy += vec2(cos(ang), sin(ang)) * 0.8 * act * (1.0 - a) * uMotion;
+
+    p *= uScale;
+
+    // ---- always-alive organic motion
+    float t = uTime;
+    vec3 n = vec3(
+      sin(t * 1.5 + aSeed.x * 60.0) * cos(t * 0.8 + aSeed.y * 30.0),
+      cos(t * 1.2 + aSeed.y * 70.0) * sin(t * 0.9 + aSeed.z * 40.0),
+      sin(t * 1.8 + aSeed.z * 50.0) * cos(t * 1.1 + aSeed.x * 35.0)
+    );
+    p += n * (uVib + act * 0.08) * uMotion;
+
+    // flowing twist ripples through the shape (not for readable text)
+    float flow = (1.0 - uText) * uMotion;
+    float tw = flow * 0.09 * sin(t * 0.8 + p.y * 0.7);
+    float cs = cos(tw), sn = sin(tw);
+    p.xz = mat2(cs, -sn, sn, cs) * p.xz;
+    p.y += flow * 0.12 * sin(t * 1.3 + length(p.xz) * 1.4 + aSeed.w * 6.0);
+
+    float orbit = t * 0.7 + aSeed.x * 40.0;
+    float orb = (uAmbient * 0.42 + uSphere * 0.15) * uMotion;
+    p.x += orb * cos(orbit + p.y * 0.2);
+    p.z += orb * sin(orbit + p.x * 0.2);
+    p.y += orb * 0.7 * sin(t * 0.55 + aSeed.y * 30.0);
+
+    // ---- world space: hand / pointer repel + swirl
+    vec4 w = modelMatrix * vec4(p, 1.0);
+    if (uHasHand > 0.5) {
+      vec3 d = w.xyz - uHand;
+      float dist = length(d);
+      float R = 3.4;
+      if (dist < R) {
+        float f = 1.0 - dist / R;
+        f *= f;
+        vec3 nd = d / (dist + 0.001);
+        w.xyz += nd * f * 1.6;
+        w.xyz += cross(vec3(0.0, 0.0, 1.0), nd) * f * 1.1 * uMotion;
+      }
+    }
+
+    vec4 mv = viewMatrix * w;
+    gl_Position = projectionMatrix * mv;
+
+    // ---- color: core-to-edge gradient, per-particle variation, glints
+    float r = clamp(length(rest) / uRadius, 0.0, 1.0);
+    vec3 grad = mix(uColCore, uColEdge, smoothstep(0.1, 1.0, r));
+    grad = clamp(grad + (aSeed.y - 0.5) * 0.3, 0.0, 1.0);
+    vec3 base = mix(grad, aImg, uImgMix);
+
+    float glint = smoothstep(0.93, 1.0, sin(t * 5.0 + aSeed.x * 62.83)) * (1.0 - uText) * uMotion;
+    float core = exp(-length(p) * 0.35) * (1.0 - uImgMix * 0.8);
+    vCol = base * (1.0 + glint * 1.4 + core * 0.45);
+    vFade = smoothstep(34.0, 7.0, -mv.z);
+
+    float size = uSize * uPx / max(0.5, -mv.z) * (1.0 + glint * 0.9);
+    gl_PointSize = clamp(size, 1.2, 64.0);
+  }
+`;
+
+const FRAG = /* glsl */ `
+  varying vec3 vCol;
+  varying float vFade;
+  void main() {
+    float d = length(gl_PointCoord - 0.5) * 2.0;
+    if (d > 1.0) discard;
+    float core = exp(-d * d * 9.0);
+    float halo = pow(1.0 - d, 2.0) * 0.32;
+    float a = (core + halo) * vFade;
+    gl_FragColor = vec4(vCol * a, a);
+  }
+`;
+
+function halfWidthOf(pos: Float32Array) {
+  let max = 0.1;
+  for (let i = 0; i < pos.length; i += 3) max = Math.max(max, Math.abs(pos[i]));
+  return max;
+}
+
+function radiusOf(pos: Float32Array) {
+  let max = 0.1;
+  for (let i = 0; i < pos.length; i += 3) {
+    const r = pos[i] * pos[i] + pos[i + 1] * pos[i + 1] + pos[i + 2] * pos[i + 2];
+    if (r > max) max = r;
+  }
+  return Math.sqrt(max);
+}
 
 export function ParticleScene({
   pattern,
   color,
   gestureState,
-  particleCount = 16000,
+  handRef,
+  particleCount = 12000,
   isImageVisible = false,
-  onRotationChange,
   customText,
+  customShape = null,
+  reducedMotion = false,
+  onReady,
 }: ParticleSceneProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const sceneRef = useRef<THREE.Scene | null>(null);
-  const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
-  const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
-  const particlesRef = useRef<THREE.Points | null>(null);
-  const animationIdRef = useRef<number>(0);
 
-  const currentPositionsRef = useRef<Float32Array | null>(null);
-  const targetPositionsRef = useRef<Float32Array | null>(null);
-  const scatterPositionsRef = useRef<Float32Array | null>(null);
-  const basePositionsRef = useRef<Float32Array | null>(null);
-  const baseColorsRef = useRef<Float32Array | null>(null);
-  const velocitiesRef = useRef<Float32Array | null>(null);
+  // Latest props, read inside the render loop so it never restarts.
+  const live = useRef({ gestureState, handRef, isImageVisible, reducedMotion });
+  live.current = { gestureState, handRef, isImageVisible, reducedMotion };
+  const onReadyRef = useRef(onReady);
+  onReadyRef.current = onReady;
 
-  const transitionProgressRef = useRef(1);
-  const scatterProgressRef = useRef(0);
-  const phaseRef = useRef<'idle' | 'scatter' | 'reform'>('idle');
-  const currentPatternRef = useRef(pattern);
-  const currentTextRef = useRef(customText);
-  const currentScaleRef = useRef(1);
-  const targetScaleRef = useRef(1);
-  const rotationRef = useRef({ x: 0, y: 0 });
-  const rotationVelocityRef = useRef({ x: 0, y: 0 });
-  const lastHandPosRef = useRef<{ x: number; y: number } | null>(null);
-  const isTransitioningRef = useRef(false);
-  const fireworksRef = useRef<{ x: number; y: number; z: number; time: number; color: THREE.Color }[]>([]);
+  const api = useRef<{
+    setShape: (pattern: PatternType, text: string | undefined, shape: ParticleShape | null) => void;
+    setColor: (hex: string) => void;
+  } | null>(null);
 
-  const [isInitialized, setIsInitialized] = useState(false);
-
-  // Create smaller, more vibrant particle material
-  const createMaterial = useCallback((particleColor: ParticleColor) => {
-    const canvas = document.createElement('canvas');
-    canvas.width = 64;
-    canvas.height = 64;
-    const ctx = canvas.getContext('2d')!;
-
-    // Volumetric sand grain texture
-    const imageData = ctx.createImageData(64, 64);
-    const data = imageData.data;
-
-    for (let i = 0; i < data.length; i += 4) {
-      const x = (i / 4) % 64;
-      const y = Math.floor((i / 4) / 64);
-      const dx = x - 32;
-      const dy = y - 32;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-
-      if (dist < 32) {
-        // Sharper falloff for a more "solid" grain feel
-        const opacity = Math.pow(1 - dist / 32, 2.5);
-        const noise = Math.random() * 0.4 + 0.6;
-
-        // Brighter core for specular highlight
-        const coreHighlight = dist < 12 ? 2.0 : 1.2;
-        const colorObj = new THREE.Color(particleColor.color);
-
-        data[i] = Math.min(255, colorObj.r * 255 * coreHighlight);
-        data[i + 1] = Math.min(255, colorObj.g * 255 * coreHighlight);
-        data[i + 2] = Math.min(255, colorObj.b * 255 * coreHighlight);
-        data[i + 3] = opacity * noise * 255 * 1.3; // More opaque for "thicker" look
-      } else {
-        data[i + 3] = 0;
-      }
-    }
-    ctx.putImageData(imageData, 0, 0);
-
-    const texture = new THREE.CanvasTexture(canvas);
-
-    return new THREE.PointsMaterial({
-      size: 0.082, // Slightly larger for better "thickness"
-      map: texture,
-      transparent: true,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      vertexColors: true,
-    });
-  }, []);
-
-  // Initialize scene
+  // ---------------------------------------------------------------- scene
   useEffect(() => {
-    if (!containerRef.current) return;
-
     const container = containerRef.current;
-    const width = container.clientWidth;
-    const height = container.clientHeight;
+    if (!container) return;
 
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x030508);
-    scene.fog = new THREE.FogExp2(0x030508, 0.04);
-    sceneRef.current = scene;
-
-    const camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
-    camera.position.z = 7;
-    cameraRef.current = camera;
+    const isCoarse = window.matchMedia('(pointer: coarse)').matches;
+    const maxDpr = Math.min(window.devicePixelRatio || 1, isCoarse ? 1.5 : 2);
+    let dpr = maxDpr;
 
     const renderer = new THREE.WebGLRenderer({
-      antialias: true,
-      alpha: true,
+      antialias: false, // soft additive points do not need MSAA
+      alpha: false,
       powerPreference: 'high-performance',
+      stencil: false,
     });
-    renderer.setSize(width, height);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setClearColor(0x04060b, 1);
+    renderer.setPixelRatio(dpr);
     container.appendChild(renderer.domElement);
-    rendererRef.current = renderer;
+    renderer.domElement.style.touchAction = 'none';
+    renderer.domElement.setAttribute('aria-hidden', 'true');
 
-    const positions = generatePattern(pattern, particleCount);
-    basePositionsRef.current = positions.slice();
-    currentPositionsRef.current = positions.slice();
-    targetPositionsRef.current = positions.slice();
-    velocitiesRef.current = new Float32Array(particleCount * 3);
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(FOV, 1, 0.1, 200);
+    camera.position.set(0, 0, 7);
+
+    // ---------- main particle geometry (all motion lives in the shader)
+    const initialPositions = generatePattern(pattern, particleCount, 1, customText ? customText.split('\n') : undefined);
+    const aTo = new THREE.BufferAttribute(initialPositions.slice(), 3);
+    const aFrom = new THREE.BufferAttribute(initialPositions.slice(), 3);
+    aTo.setUsage(THREE.DynamicDrawUsage);
+    aFrom.setUsage(THREE.DynamicDrawUsage);
+
+    const seeds = new Float32Array(particleCount * 4);
+    for (let i = 0; i < seeds.length; i++) seeds[i] = Math.random();
+    const aImg = new THREE.BufferAttribute(new Float32Array(particleCount * 3), 3);
+    aImg.setUsage(THREE.DynamicDrawUsage);
 
     const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    // 'position' only provides the draw count; the shader uses aFrom / aTo.
+    geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(particleCount * 3), 3));
+    geometry.setAttribute('aFrom', aFrom);
+    geometry.setAttribute('aTo', aTo);
+    geometry.setAttribute('aSeed', new THREE.BufferAttribute(seeds, 4));
+    geometry.setAttribute('aImg', aImg);
+    geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 60);
 
-    // Add color variation and glint offsets for realism
-    const colors = new Float32Array(particleCount * 3);
-    const glints = new Float32Array(particleCount);
-    const baseColor = new THREE.Color(color.color);
-    for (let i = 0; i < particleCount; i++) {
-      const variation = Math.random() * 0.4 - 0.2;
-      colors[i * 3] = Math.max(0, Math.min(1, baseColor.r + variation));
-      colors[i * 3 + 1] = Math.max(0, Math.min(1, baseColor.g + variation));
-      colors[i * 3 + 2] = Math.max(0, Math.min(1, baseColor.b + variation));
-      glints[i] = Math.random(); // Random shimmer offset
+    const colCore = new THREE.Color(color.color);
+    const colEdge = colCore.clone();
+    const targetCore = colCore.clone();
+    const targetEdge = colCore.clone();
+    let baseHex = color.color;
+
+    const uniforms = {
+      uTime: { value: 0 },
+      uT: { value: 0.3 }, // start scattered: the first shape assembles itself
+      uScale: { value: 1 },
+      uSize: { value: 0.085 },
+      uPx: { value: 600 },
+      uVib: { value: 0.03 },
+      uText: { value: isTextPattern(pattern) ? 1 : 0 },
+      uMotion: { value: 1 },
+      uAmbient: { value: 0 },
+      uSphere: { value: 0 },
+      uHasHand: { value: 0 },
+      uImgMix: { value: 0 },
+      uRadius: { value: radiusOf(initialPositions) },
+      uHand: { value: new THREE.Vector3() },
+      uColCore: { value: colCore },
+      uColEdge: { value: colEdge },
+    };
+
+    const material = new THREE.ShaderMaterial({
+      uniforms,
+      vertexShader: VERT,
+      fragmentShader: FRAG,
+      transparent: true,
+      depthWrite: false,
+      depthTest: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const points = new THREE.Points(geometry, material);
+    points.frustumCulled = false;
+    scene.add(points);
+
+    // ---------- distant stars: tiny static backdrop for depth
+    const starCount = isCoarse ? 260 : 600;
+    const starPos = new Float32Array(starCount * 3);
+    for (let i = 0; i < starCount; i++) {
+      const r = 24 + Math.random() * 30;
+      const th = Math.random() * Math.PI * 2;
+      const ph = Math.acos(2 * Math.random() - 1);
+      starPos[i * 3] = r * Math.sin(ph) * Math.cos(th);
+      starPos[i * 3 + 1] = r * Math.sin(ph) * Math.sin(th);
+      starPos[i * 3 + 2] = -Math.abs(r * Math.cos(ph)) - 6;
     }
-    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-    baseColorsRef.current = colors.slice();
-    geometry.setAttribute('glint', new THREE.BufferAttribute(glints, 1));
+    const starGeo = new THREE.BufferGeometry();
+    starGeo.setAttribute('position', new THREE.BufferAttribute(starPos, 3));
+    const starMat = new THREE.PointsMaterial({
+      size: 0.09,
+      color: 0x9fb4ff,
+      transparent: true,
+      opacity: 0.55,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const stars = new THREE.Points(starGeo, starMat);
+    scene.add(stars);
 
-    const material = createMaterial(color);
-    const particles = new THREE.Points(geometry, material);
-    scene.add(particles);
-    particlesRef.current = particles;
+    // ---------- state (plain locals: no React in the hot path)
+    let currentPattern = pattern;
+    let currentText = customText;
+    let currentShape: ParticleShape | null = null;
+    let textMode = isTextPattern(pattern);
+    let halfWidth = halfWidthOf(initialPositions);
+    let imgTarget = 0;
+    let transition = 0.3;
+    let scale = 1;
+    let targetScale = 1;
+    let rotY = 0;
+    let rotX = 0;
+    let velY = 0;
+    let velX = 0;
+    let lastLandmarks: unknown = null;
+    let lastHand: { x: number; y: number } | null = null;
+    const handWorld = new THREE.Vector3();
+    const handTarget = new THREE.Vector3();
+    let handActive = 0;
+    const pointer = { x: 0, y: 0, active: false };
+    const par = { x: 0, y: 0 };
+    let camY = 0;
+    let lookY = 0;
+    let aspect = 1;
+    let pendingShots: ((b: Blob | null) => void)[] = [];
 
-    setIsInitialized(true);
+    const updatePalette = () => {
+      targetCore.set(baseHex);
+      const shift = currentShape ? 0.12 : PATTERN_HUE_SHIFT[currentPattern] ?? (textMode ? 0.05 : 0.1);
+      targetEdge.set(baseHex).offsetHSL(shift, 0.05, 0.06);
+    };
+    updatePalette();
+    colEdge.copy(targetEdge);
 
-    const handleResize = () => {
-      if (!containerRef.current || !camera || !renderer) return;
-      const w = containerRef.current.clientWidth;
-      const h = containerRef.current.clientHeight;
-      camera.aspect = w / h;
+    const resize = () => {
+      const w = Math.max(1, container.clientWidth);
+      const h = Math.max(1, container.clientHeight);
+      aspect = w / h;
+      renderer.setPixelRatio(dpr);
+      renderer.setSize(w, h, false);
+      renderer.domElement.style.width = '100%';
+      renderer.domElement.style.height = '100%';
+      camera.aspect = aspect;
       camera.updateProjectionMatrix();
-      renderer.setSize(w, h);
+      uniforms.uPx.value = (h * dpr) / (2 * Math.tan((FOV * Math.PI) / 360));
     };
+    resize();
+    const ro = new ResizeObserver(resize);
+    ro.observe(container);
 
-    window.addEventListener('resize', handleResize);
-
-    return () => {
-      window.removeEventListener('resize', handleResize);
-      cancelAnimationFrame(animationIdRef.current);
-      renderer.dispose();
-      geometry.dispose();
-      material.dispose();
-      container.removeChild(renderer.domElement);
+    // ---------- touch / mouse acts as a hand
+    const onPointer = (e: PointerEvent) => {
+      const r = container.getBoundingClientRect();
+      pointer.x = ((e.clientX - r.left) / r.width) * 2 - 1;
+      pointer.y = -(((e.clientY - r.top) / r.height) * 2 - 1);
+      pointer.active = true;
     };
-  }, [particleCount, createMaterial]);
+    const onLeave = () => {
+      pointer.active = false;
+    };
+    container.addEventListener('pointermove', onPointer, { passive: true });
+    container.addEventListener('pointerdown', onPointer, { passive: true });
+    container.addEventListener('pointerup', onLeave, { passive: true });
+    container.addEventListener('pointerleave', onLeave, { passive: true });
 
-  // Update pattern with scatter-then-reform transition
-  useEffect(() => {
-    if (!isInitialized || !basePositionsRef.current || !targetPositionsRef.current) return;
+    // ---------- public API for prop-driven changes
+    api.current = {
+      setShape: (next, text, shape) => {
+        if (next === currentPattern && text === currentText && shape === currentShape) return;
+        currentPattern = next;
+        currentText = text;
+        currentShape = shape;
+        (aFrom.array as Float32Array).set(aTo.array as Float32Array);
+        const to = aTo.array as Float32Array;
 
-    if (pattern !== currentPatternRef.current || customText !== currentTextRef.current) {
-      console.log('ParticleScene: Pattern or Text change detected:', 
-        currentPatternRef.current, '->', pattern, 
-        '|', currentTextRef.current, '->', customText
-      );
-      
-      // Special effect for Victory: Explosion!
-      if (pattern === 'victoryHeart') {
-        for (let i = 0; i < particleCount; i++) {
-          const vx = (Math.random() - 0.5) * 1.5;
-          const vy = (Math.random() - 0.5) * 1.5;
-          const vz = (Math.random() - 0.5) * 1.5;
-          velocitiesRef.current[i * 3] += vx;
-          velocitiesRef.current[i * 3 + 1] += vy;
-          velocitiesRef.current[i * 3 + 2] += vz;
-        }
-      }
-
-      currentPatternRef.current = pattern;
-      currentTextRef.current = customText;
-      
-      currentPositionsRef.current = basePositionsRef.current.slice();
-      
-      // Pass text as a single line, let generatePattern handle wrapping
-      const customLines = customText ? [customText] : undefined;
-      targetPositionsRef.current = generatePattern(pattern, particleCount, 1, customLines);
-
-      // Generate scatter positions - particles explode outward
-      const scatterPositions = new Float32Array(particleCount * 3);
-      for (let i = 0; i < particleCount; i++) {
-        const theta = Math.random() * Math.PI * 2;
-        const phi = Math.acos(2 * Math.random() - 1);
-        const radius = 8 + Math.random() * 12;
-        scatterPositions[i * 3] = Math.sin(phi) * Math.cos(theta) * radius;
-        scatterPositions[i * 3 + 1] = Math.sin(phi) * Math.sin(theta) * radius;
-        scatterPositions[i * 3 + 2] = Math.cos(phi) * radius;
-      }
-      scatterPositionsRef.current = scatterPositions;
-
-      transitionProgressRef.current = 0;
-      scatterProgressRef.current = 0;
-      phaseRef.current = 'scatter';
-      isTransitioningRef.current = true;
-
-      if (isTextPattern(pattern)) {
-        rotationRef.current = { x: 0, y: 0 };
-        rotationVelocityRef.current = { x: 0, y: 0 };
-        targetScaleRef.current = 1;
-        currentScaleRef.current = 1;
-      }
-    }
-  }, [pattern, customText, particleCount, isInitialized]);
-
-  // Update color
-  useEffect(() => {
-    if (!particlesRef.current || !isInitialized) return;
-    const newMaterial = createMaterial(color);
-    particlesRef.current.material = newMaterial;
-
-    const colorAttribute = particlesRef.current.geometry.getAttribute('color') as THREE.BufferAttribute;
-    const colors = colorAttribute.array as Float32Array;
-    const baseColor = new THREE.Color(color.color);
-
-    for (let i = 0; i < colors.length; i += 3) {
-      const variation = Math.random() * 0.24 - 0.12;
-      colors[i] = Math.max(0, Math.min(1, baseColor.r + variation));
-      colors[i + 1] = Math.max(0, Math.min(1, baseColor.g + variation));
-      colors[i + 2] = Math.max(0, Math.min(1, baseColor.b + variation));
-    }
-
-    baseColorsRef.current = colors.slice();
-    colorAttribute.needsUpdate = true;
-  }, [color, createMaterial, isInitialized]);
-
-  // Update scale based on gesture
-  useEffect(() => {
-      if (isTextPattern(currentPatternRef.current)) {
-        targetScaleRef.current = 1;
-    } else if (gestureState.isDetected) {
-      targetScaleRef.current = 0.9 + gestureState.openness * 1.35;
-    } else {
-      targetScaleRef.current = 1.2;
-    }
-  }, [gestureState]);
-
-  // Animation loop - hyper-realistic
-  useEffect(() => {
-    if (!isInitialized) return;
-
-    const animate = () => {
-      animationIdRef.current = requestAnimationFrame(animate);
-
-      const particles = particlesRef.current;
-      const renderer = rendererRef.current;
-      const scene = sceneRef.current;
-      const camera = cameraRef.current;
-
-      if (!particles || !renderer || !scene || !camera) return;
-
-      const time = Date.now() * 0.001;
-      const isText = isTextPattern(currentPatternRef.current);
-      const isAmbient = currentPatternRef.current === 'ambient';
-      const isSphere = currentPatternRef.current === 'sphere';
-
-      const positionAttribute = particles.geometry.attributes.position as THREE.BufferAttribute;
-      const positions = positionAttribute.array as Float32Array;
-      const colorAttribute = particles.geometry.attributes.color as THREE.BufferAttribute;
-      const colors = colorAttribute.array as Float32Array;
-      const glintAttribute = particles.geometry.getAttribute('glint') as THREE.BufferAttribute | undefined;
-      const glintOffsets = glintAttribute?.array as Float32Array;
-
-      // Scatter then reform transition
-      if (phaseRef.current === 'scatter') {
-        scatterProgressRef.current = Math.min(1, scatterProgressRef.current + 0.045);
-
-        if (currentPositionsRef.current && scatterPositionsRef.current) {
-          const smoothProgress = scatterProgressRef.current;
-          // More aggressive cubic out easing for the "explosion"
-          const easedProgress = 1 - Math.pow(1 - smoothProgress, 3);
-
-          for (let i = 0; i < positions.length; i += 3) {
-            const currentX = currentPositionsRef.current[i];
-            const currentY = currentPositionsRef.current[i + 1];
-            const currentZ = currentPositionsRef.current[i + 2];
-            const scatterX = scatterPositionsRef.current[i];
-            const scatterY = scatterPositionsRef.current[i + 1];
-            const scatterZ = scatterPositionsRef.current[i + 2];
-
-            // Add more orbital swirl during scatter
-            const orbitSpeed = time * 3 + (i * 0.001);
-            const swirlX = Math.cos(orbitSpeed) * (1 - easedProgress) * 0.8;
-            const swirlY = Math.sin(orbitSpeed) * (1 - easedProgress) * 0.8;
-
-            positions[i] = currentX + (scatterX - currentX) * easedProgress + swirlX;
-            positions[i + 1] = currentY + (scatterY - currentY) * easedProgress + swirlY;
-            positions[i + 2] = currentZ + (scatterZ - currentZ) * easedProgress;
-
-            basePositionsRef.current![i] = positions[i];
-            basePositionsRef.current![i + 1] = positions[i + 1];
-            basePositionsRef.current![i + 2] = positions[i + 2];
-          }
-
-          if (scatterProgressRef.current >= 1) {
-            phaseRef.current = 'reform';
-            transitionProgressRef.current = 0;
-            currentPositionsRef.current = scatterPositionsRef.current.slice();
-          }
-        }
-      } else if (phaseRef.current === 'reform') {
-        // Slightly slower reform for better readability
-        transitionProgressRef.current = Math.min(1, transitionProgressRef.current + 0.022);
-
-        if (currentPositionsRef.current && targetPositionsRef.current) {
-          const smoothProgress = transitionProgressRef.current;
-          // Smoother exponential easing for reforming
-          const easedProgress = smoothProgress === 1 ? 1 : 1 - Math.pow(2, -8 * smoothProgress);
-
-          for (let i = 0; i < positions.length; i += 3) {
-            // Staggered reform based on particle index for a "wave" effect
-            const stagger = (i / positions.length) * 0.15;
-            const particleProgress = Math.max(0, Math.min(1, (easedProgress - stagger) / (1 - stagger)));
-
-            const currentX = currentPositionsRef.current[i];
-            const currentY = currentPositionsRef.current[i + 1];
-            const currentZ = currentPositionsRef.current[i + 2];
-            const targetX = targetPositionsRef.current[i];
-            const targetY = targetPositionsRef.current[i + 1];
-            const targetZ = targetPositionsRef.current[i + 2];
-
-            // Subtle noise that tapers off as particles reach their target
-            const noise = Math.sin(time * 3 + i * 0.2) * (1 - particleProgress) * 0.15;
-            
-            positions[i] = currentX + (targetX - currentX) * particleProgress + noise;
-            positions[i + 1] = currentY + (targetY - currentY) * particleProgress + noise;
-            positions[i + 2] = currentZ + (targetZ - currentZ) * particleProgress + noise;
-
-            basePositionsRef.current![i] = positions[i];
-            basePositionsRef.current![i + 1] = positions[i + 1];
-            basePositionsRef.current![i + 2] = positions[i + 2];
-          }
-
-          if (transitionProgressRef.current >= 1) {
-            // Add pulsing effect for Victory Heart
-            let scaleMultiplier = 1.0;
-            if (pattern === 'victoryHeart') {
-              scaleMultiplier = 1.0 + Math.sin(Date.now() * 0.003) * 0.08;
+        if (shape) {
+          // Spread particles over the shape's sample points.
+          const n = shape.points.length / 3;
+          const img = aImg.array as Float32Array;
+          for (let i = 0; i < particleCount; i++) {
+            const k = Math.floor(Math.random() * n);
+            to[i * 3] = shape.points[k * 3] + (Math.random() - 0.5) * 0.02;
+            to[i * 3 + 1] = shape.points[k * 3 + 1] + (Math.random() - 0.5) * 0.02;
+            to[i * 3 + 2] = shape.points[k * 3 + 2] + (Math.random() - 0.5) * 0.12;
+            if (shape.colors) {
+              img[i * 3] = shape.colors[k * 3];
+              img[i * 3 + 1] = shape.colors[k * 3 + 1];
+              img[i * 3 + 2] = shape.colors[k * 3 + 2];
             }
-
-            for (let i = 0; i < particleCount; i++) {
-              // Apply damping to velocities
-              velocitiesRef.current[i * 3] *= 0.94;
-              velocitiesRef.current[i * 3 + 1] *= 0.94;
-              velocitiesRef.current[i * 3 + 2] *= 0.94;
-
-              currentPositionsRef.current[i * 3] += velocitiesRef.current[i * 3];
-              currentPositionsRef.current[i * 3 + 1] += velocitiesRef.current[i * 3 + 1];
-              currentPositionsRef.current[i * 3 + 2] += velocitiesRef.current[i * 3 + 2];
-
-              // Apply pulse scale
-              if (scaleMultiplier !== 1.0) {
-                const tx = targetPositionsRef.current[i * 3] * scaleMultiplier;
-                const ty = targetPositionsRef.current[i * 3 + 1] * scaleMultiplier;
-                const tz = targetPositionsRef.current[i * 3 + 2] * scaleMultiplier;
-                
-                currentPositionsRef.current[i * 3] += (tx - currentPositionsRef.current[i * 3]) * 0.05;
-                currentPositionsRef.current[i * 3 + 1] += (ty - currentPositionsRef.current[i * 3 + 1]) * 0.05;
-                currentPositionsRef.current[i * 3 + 2] += (tz - currentPositionsRef.current[i * 3 + 2]) * 0.05;
-              } else {
-                currentPositionsRef.current[i * 3] += (targetPositionsRef.current[i * 3] - currentPositionsRef.current[i * 3]) * 0.08;
-                currentPositionsRef.current[i * 3 + 1] += (targetPositionsRef.current[i * 3 + 1] - currentPositionsRef.current[i * 3 + 1]) * 0.08;
-                currentPositionsRef.current[i * 3 + 2] += (targetPositionsRef.current[i * 3 + 2] - currentPositionsRef.current[i * 3 + 2]) * 0.08;
-              }
-
-              // Realistic Fireworks Logic
-              if (pattern === 'victoryHeart') {
-                // Reset color to base first
-                const colorAttr = (particlesRef.current!.geometry.attributes.color as THREE.BufferAttribute);
-                colorAttr.setXYZ(i, baseColorsRef.current![i * 3], baseColorsRef.current![i * 3 + 1], baseColorsRef.current![i * 3 + 2]);
-
-                // Occasional new burst
-                if (Math.random() > 0.96 && fireworksRef.current.length < 15) {
-                  const newFw = {
-                    x: (Math.random() - 0.5) * 16, // Visible X range
-                    y: (Math.random() - 0.5) * 10 + 2, // Visible Y range
-                    z: (Math.random() - 0.5) * 5 - 2, // Visible Z range
-                    time: Date.now(),
-                    color: new THREE.Color(['#ffffff', '#ffaa00', '#ff00aa', '#00ffff'][Math.floor(Math.random() * 4)])
-                  };
-                  fireworksRef.current.push(newFw);
-                }
-
-                // Cleanup old fireworks
-                fireworksRef.current = fireworksRef.current.filter(f => Date.now() - f.time < 1500);
-
-                // Affect particles near burst centers
-                fireworksRef.current.forEach(fw => {
-                  const age = (Date.now() - fw.time) / 1000;
-                  const dx = currentPositionsRef.current![i * 3] - fw.x;
-                  const dy = currentPositionsRef.current![i * 3 + 1] - fw.y;
-                  const distSq = dx * dx + dy * dy;
-                  
-                  if (distSq < 64) { // Range of 8 units
-                    if (age < 0.1) { // Initial pop
-                      const angle = Math.random() * Math.PI * 2;
-                      const phi = Math.random() * Math.PI;
-                      const speed = 6.0 + Math.random() * 8.0; // Much faster pop
-                      
-                      velocitiesRef.current![i * 3] += Math.sin(phi) * Math.cos(angle) * speed;
-                      velocitiesRef.current![i * 3 + 1] += Math.sin(phi) * Math.sin(angle) * speed;
-                      velocitiesRef.current![i * 3 + 2] += Math.cos(phi) * speed;
-                    }
-                    
-                    // Flash color
-                    if (age < 1.0) {
-                      const flash = Math.max(0, 1.0 - age * 0.9);
-                      colorAttr.setXYZ(
-                        i, 
-                        Math.min(1.0, baseColorsRef.current![i * 3] + fw.color.r * flash * 2.5), // Ultra bright
-                        Math.min(1.0, baseColorsRef.current![i * 3 + 1] + fw.color.g * flash * 2.5),
-                        Math.min(1.0, baseColorsRef.current![i * 3 + 2] + fw.color.b * flash * 2.5)
-                      );
-                      // Apply extra gravity
-                      velocitiesRef.current![i * 3 + 1] -= 0.12; // Stronger downward pull
-                    }
-                  }
-                });
-                
-                colorAttr.needsUpdate = true;
-                
-                // Extra shimmer for all particles in victory mode
-                if (Math.random() > 0.99) {
-                   velocitiesRef.current![i * 3] += (Math.random() - 0.5) * 0.2;
-                   velocitiesRef.current![i * 3 + 1] += (Math.random() - 0.5) * 0.2;
-                }
-              }
-            }      
-            
-            currentPositionsRef.current = targetPositionsRef.current.slice();
-            basePositionsRef.current = targetPositionsRef.current.slice();
-            isTransitioningRef.current = false;
-            phaseRef.current = 'idle';
           }
+          aImg.needsUpdate = true;
+          imgTarget = shape.colors ? 1 : 0;
+          textMode = shape.flat;
+        } else {
+          to.set(generatePattern(next, particleCount, 1, text ? text.split('\n') : undefined));
+          imgTarget = 0;
+          textMode = isTextPattern(next);
         }
+        aFrom.needsUpdate = true;
+        aTo.needsUpdate = true;
+        uniforms.uRadius.value = radiusOf(to);
+        halfWidth = halfWidthOf(to);
+        transition = 0;
+        updatePalette();
+        if (textMode) {
+          velX = velY = 0;
+          targetScale = 1;
+          scale = 1;
+        }
+      },
+      setColor: (hex) => {
+        baseHex = hex;
+        updatePalette();
+      },
+    };
+
+    onReadyRef.current?.({
+      canvas: renderer.domElement,
+      screenshot: () => new Promise(resolve => pendingShots.push(resolve)),
+    });
+
+    // ---------- adaptive quality: drop resolution if the device struggles
+    let emaDt = 1 / 60;
+    let slowFor = 0;
+
+    let raf = 0;
+    let prev = performance.now();
+    let elapsed = 0;
+
+    const frame = (now: number) => {
+      raf = requestAnimationFrame(frame);
+      const dt = Math.min(0.1, (now - prev) / 1000);
+      prev = now;
+      elapsed += dt;
+      const k60 = dt * 60; // frame-rate independent smoothing factor
+
+      emaDt += (dt - emaDt) * 0.05;
+      if (emaDt > 0.026) {
+        slowFor += dt;
+        if (slowFor > 2 && dpr > 0.75) {
+          dpr = Math.max(0.75, dpr - 0.25);
+          slowFor = 0;
+          resize();
+        }
+      } else {
+        slowFor = 0;
       }
 
-      // Smooth scale transition
-      const scaleSpeed = isTransitioningRef.current ? 0.22 : 0.14;
-      currentScaleRef.current += (targetScaleRef.current - currentScaleRef.current) * scaleSpeed;
-      const scale = currentScaleRef.current;
+      const L = live.current;
+      const motion = L.reducedMotion ? 0.3 : 1;
+      const isText = textMode;
+      const hand = L.handRef?.current ?? L.gestureState;
+      const lm = hand.isDetected ? hand.landmarks : undefined;
 
-      // Hand interaction and rotation setup
-      let handX = 0, handY = 0, handZ = 0;
+      // ----- where is the "hand" in world space?
+      const halfH = Math.tan((FOV * Math.PI) / 360) * camera.position.z;
+      const halfW = halfH * aspect;
       let hasHand = false;
-      if (!isText && gestureState.isDetected && gestureState.landmarks && gestureState.landmarks.length > 0) {
-        // Use palm center (landmark 0 and 9 average)
-        const l0 = gestureState.landmarks[0];
-        const l9 = gestureState.landmarks[9];
-        handX = (l0.x + l9.x - 1) * 10; // Map 0-1 to -5 to 5
-        handY = -(l0.y + l9.y - 1) * 10;
-        handZ = (l0.z + l9.z) * 5;
+      if (!isText && lm && lm.length > 9) {
+        const cx = (lm[0].x + lm[9].x) / 2;
+        const cy = (lm[0].y + lm[9].y) / 2;
+        handTarget.set((cx - 0.5) * 2 * halfW, -(cy - 0.5) * 2 * halfH, 0.4);
+        par.x += ((cx - 0.5) * 2 - par.x) * 0.08 * k60;
+        par.y += (-(cy - 0.5) * 2 - par.y) * 0.08 * k60;
         hasHand = true;
 
-        // Rotation logic: Calculate delta from last hand position
-        if (lastHandPosRef.current) {
-          const deltaX = l9.x - lastHandPosRef.current.x;
-          const deltaY = l9.y - lastHandPosRef.current.y;
-
-          // Add to velocity instead of direct target
-          const sensitivity = 3.0;
-          rotationVelocityRef.current.y += deltaX * sensitivity;
-          rotationVelocityRef.current.x += deltaY * sensitivity;
+        if (lm !== lastLandmarks) {
+          lastLandmarks = lm;
+          if (lastHand) {
+            velY += (lm[9].x - lastHand.x) * 3.2 * motion;
+            velX += (lm[9].y - lastHand.y) * 2.0 * motion;
+          }
+          lastHand = { x: lm[9].x, y: lm[9].y };
         }
-        lastHandPosRef.current = { x: l9.x, y: l9.y };
+      } else if (!isText && pointer.active) {
+        handTarget.set(pointer.x * halfW, pointer.y * halfH, 0.4);
+        par.x += (pointer.x - par.x) * 0.08 * k60;
+        par.y += (pointer.y - par.y) * 0.08 * k60;
+        hasHand = true;
+        lastHand = null;
+        lastLandmarks = null;
       } else {
-        lastHandPosRef.current = null;
-        // Subtle auto-rotation when no hand is detected
-        if (!isText) {
-          rotationVelocityRef.current.y += 0.0008;
-        }
+        lastHand = null;
+        lastLandmarks = null;
+        par.x += (0 - par.x) * 0.04 * k60;
+        par.y += (0 - par.y) * 0.04 * k60;
       }
+      if (hasHand) {
+        if (handActive < 0.5) handWorld.copy(handTarget);
+        handWorld.lerp(handTarget, Math.min(1, 0.35 * k60));
+      }
+      handActive = hasHand ? 1 : 0;
 
-      // Apply velocity to rotation
+      // ----- transition clock
+      if (transition < 1) transition = Math.min(1, transition + dt / TRANSITION_SECONDS);
+
+      // ----- scale from gesture openness
+      if (isText) targetScale = 1;
+      else if (hand.isDetected) targetScale = 0.9 + hand.openness * 1.35;
+      else targetScale = 1.2 + Math.sin(elapsed * 0.9) * 0.05 * motion;
+      if (currentPattern === 'victoryHeart' && !currentShape) targetScale *= 1 + Math.sin(elapsed * 3.2) * 0.08 * motion;
+      scale += (targetScale - scale) * (transition < 1 ? 0.22 : 0.14) * Math.min(2, k60);
+
+      // ----- rotation with inertia
       if (!isText) {
-        rotationRef.current.x += rotationVelocityRef.current.x;
-        rotationRef.current.y += rotationVelocityRef.current.y;
+        rotY += velY * k60;
+        rotX += (Math.sin(elapsed * 0.3) * 0.15 * motion + par.y * -0.12 - rotX) * 0.06 * k60;
+        rotX += velX * 0.4 * k60;
+        velY *= Math.pow(0.93, k60);
+        velX *= Math.pow(0.9, k60);
+        rotY += 0.18 * dt * motion; // idle spin so it never looks frozen
       } else {
-        rotationRef.current.x += (0 - rotationRef.current.x) * 0.18;
-        rotationRef.current.y += (0 - rotationRef.current.y) * 0.18;
+        rotX += (0 - rotX) * Math.min(1, 0.18 * k60);
+        rotY += (0 - rotY) * Math.min(1, 0.18 * k60);
+        velX = velY = 0;
       }
+      points.rotation.set(rotX, rotY, 0);
 
-      // Apply friction (inertia)
-      const friction = 0.92;
-      rotationVelocityRef.current.x *= friction;
-      rotationVelocityRef.current.y *= friction;
+      // ----- palette glides instead of snapping
+      const ck = Math.min(1, 0.05 * k60);
+      colCore.lerp(targetCore, ck);
+      colEdge.lerp(targetEdge, ck);
 
-      // Apply rotation to the particles object
-      particles.rotation.x = rotationRef.current.x;
-      particles.rotation.y = rotationRef.current.y;
+      // ----- uniforms
+      uniforms.uTime.value = elapsed;
+      uniforms.uT.value = transition;
+      uniforms.uScale.value = scale;
+      uniforms.uMotion.value += (motion - uniforms.uMotion.value) * 0.1;
+      uniforms.uText.value += ((isText ? 1 : 0) - uniforms.uText.value) * 0.15;
+      uniforms.uImgMix.value += (imgTarget - uniforms.uImgMix.value) * Math.min(1, 0.06 * k60);
+      uniforms.uAmbient.value = currentPattern === 'ambient' && !currentShape ? 0.8 : 0;
+      uniforms.uSphere.value = currentPattern === 'sphere' && !currentShape ? 1 : 0;
+      uniforms.uVib.value = isText
+        ? transition < 1 ? 0.05 : 0.002
+        : currentPattern === 'ambient' ? 0.34
+        : currentPattern === 'victoryHeart' ? 0.22
+        : transition < 1 ? 0.1 : 0.035;
+      uniforms.uHasHand.value = hasHand ? 1 : 0;
+      uniforms.uHand.value.copy(handWorld);
 
-      // Export rotation state for UI
-      if (onRotationChange) {
-        onRotationChange(rotationRef.current, hasHand);
-      }
+      // ----- camera: parallax follows hand/pointer, fits portrait screens
+      const portraitFit = aspect < 1 ? Math.min(1.9, 1 / Math.pow(Math.max(aspect, 0.4), 0.75)) : 1;
+      // Flat shapes (text, images) must fit the screen width, with a small margin.
+      const fitZ = isText ? (halfWidth * 1.12) / (Math.tan((FOV * Math.PI) / 360) * aspect) : 0;
+      const baseZ = Math.max((isText ? 8.5 : 5.9) * (isText ? 1 : portraitFit), fitZ);
+      const breathe = isText ? 0 : Math.sin(elapsed * 0.45) * 0.14 * motion;
+      camera.position.z += (baseZ + breathe - camera.position.z) * 0.06 * k60;
 
-      // Apply physics and aesthetics
-      if (basePositionsRef.current) {
-        for (let i = 0; i < positions.length; i += 3) {
-          const baseX = basePositionsRef.current[i];
-          const baseY = basePositionsRef.current[i + 1];
-          const baseZ = basePositionsRef.current[i + 2];
+      const textImage = isText && L.isImageVisible && !currentShape;
+      const targetCamY = isText ? (textImage ? 2.8 : 0) : par.y * 0.9 * motion + Math.cos(elapsed * 0.5) * 0.4 * motion;
+      const targetCamX = isText ? 0 : par.x * 1.1 * motion + Math.sin(elapsed * 0.4) * 0.6 * motion;
+      camera.position.x += (targetCamX - camera.position.x) * 0.05 * k60;
+      camY += (targetCamY - camY) * 0.05 * k60;
+      camera.position.y = camY;
+      const targetLook = textImage ? 2.8 : isText ? -0.5 : 0;
+      lookY += (targetLook - lookY) * 0.06 * k60;
+      camera.lookAt(0, lookY, 0);
+      camera.rotation.z = isText ? 0 : -par.x * 0.025 * motion; // subtle roll
 
-          // 1. Organic Noise-like movement (Simplex approximation)
-          const noiseX = Math.sin(time * 1.5 + i * 0.1) * Math.cos(time * 0.8 + i * 0.05);
-          const noiseY = Math.cos(time * 1.2 + i * 0.12) * Math.sin(time * 0.9 + i * 0.08);
-          const noiseZ = Math.sin(time * 1.8 + i * 0.07) * Math.cos(time * 1.1 + i * 0.1);
-
-          const vibration = isText
-            ? isTransitioningRef.current ? 0.05 : 0.002
-            : isAmbient ? 0.34 : isTransitioningRef.current ? 0.08 : 0.02;
-          let px = baseX * scale + noiseX * vibration;
-          let py = baseY * scale + noiseY * vibration;
-          let pz = baseZ * scale + noiseZ * vibration;
-
-          if (isAmbient) {
-            const particleIndex = i / 3;
-            const orbit = time * 0.7 + particleIndex * 0.019;
-            px += Math.cos(orbit + baseY * 0.2) * 0.42;
-            py += Math.sin(time * 0.55 + particleIndex * 0.013) * 0.3;
-            pz += Math.sin(orbit + baseX * 0.2) * 0.42;
-          } else if (isSphere) {
-            const particleIndex = i / 3;
-            const orbit = time * 0.72 + particleIndex * 0.011;
-            px += Math.cos(orbit) * 0.15;
-            py += Math.sin(time * 0.62 + particleIndex * 0.009) * 0.1;
-            pz += Math.sin(orbit) * 0.15;
-          }
-
-          // 2. Hand Interaction (Magnetic/Repelling force)
-          if (hasHand && !isText) {
-            const dx = px - handX;
-            const dy = py - handY;
-            const dz = pz - handZ;
-            const distSq = dx * dx + dy * dy + dz * dz;
-            const dist = Math.sqrt(distSq);
-
-            if (dist < 3) {
-              const force = (1 - dist / 3) * 0.15;
-              px += dx * force;
-              py += dy * force;
-              pz += dz * force;
-            }
-          }
-
-          positions[i] = px;
-          positions[i + 1] = py;
-          positions[i + 2] = pz;
-
-          // 3. Specular Glints (Shimmer)
-          if (glintOffsets && baseColorsRef.current) {
-            const glint = Math.sin(time * 5 + glintOffsets[i / 3] * 10);
-            const brightness = glint > 0.95 && !isText ? 1.8 : 1.0;
-
-            colors[i] = baseColorsRef.current[i] * brightness;
-            colors[i + 1] = baseColorsRef.current[i + 1] * brightness;
-            colors[i + 2] = baseColorsRef.current[i + 2] * brightness;
-          }
-        }
-      }
-
-      positionAttribute.needsUpdate = true;
-      if (colorAttribute) colorAttribute.needsUpdate = true;
-
-      // Dynamic rotation
-      if (!isText) {
-        rotationRef.current.y += isTransitioningRef.current ? 0.008 : 0.005;
-        rotationRef.current.x = Math.sin(Date.now() * 0.0003) * 0.15;
-      } else {
-        rotationRef.current.x *= 0.82;
-        rotationRef.current.y *= 0.82;
-      }
-      // Apply rotation (unless victoryHeart)
-      if (pattern === 'victoryHeart') {
-        rotationRef.current.y *= 0.9;
-        rotationRef.current.x *= 0.9;
-      }
-      particles.rotation.y = rotationRef.current.y;
-      particles.rotation.x = rotationRef.current.x;
-
-      // Camera movement
-      const targetCameraY = isText ? (isImageVisible ? 2.8 : 0) : Math.cos(Date.now() * 0.0005) * 0.5;
-      camera.position.x = isText ? 0 : Math.sin(Date.now() * 0.0004) * 0.8;
-      camera.position.y += (targetCameraY - camera.position.y) * 0.05;
-      camera.position.z = isText ? 8.5 : 5.9; // Slightly further back for better frame
-      camera.lookAt(0, isText && isImageVisible ? 2.8 : (isText ? -0.5 : 0), 0);
+      stars.rotation.y = elapsed * 0.01 * motion;
+      stars.position.x = -camera.position.x * 0.3;
+      stars.position.y = -camera.position.y * 0.3;
 
       renderer.render(scene, camera);
-    };
 
-    animate();
+      // Read the drawing buffer in the same task as render, before it is cleared.
+      if (pendingShots.length) {
+        const shots = pendingShots;
+        pendingShots = [];
+        renderer.domElement.toBlob(b => shots.forEach(s => s(b)), 'image/png');
+      }
+    };
+    raf = requestAnimationFrame(frame);
+
+    const onContextLost = (e: Event) => e.preventDefault();
+    renderer.domElement.addEventListener('webglcontextlost', onContextLost);
 
     return () => {
-      cancelAnimationFrame(animationIdRef.current);
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+      container.removeEventListener('pointermove', onPointer);
+      container.removeEventListener('pointerdown', onPointer);
+      container.removeEventListener('pointerup', onLeave);
+      container.removeEventListener('pointerleave', onLeave);
+      renderer.domElement.removeEventListener('webglcontextlost', onContextLost);
+      pendingShots.forEach(s => s(null));
+      onReadyRef.current?.(null);
+      api.current = null;
+      geometry.dispose();
+      material.dispose();
+      starGeo.dispose();
+      starMat.dispose();
+      renderer.dispose();
+      renderer.domElement.remove();
     };
-  }, [isInitialized, gestureState]);
+    // Scene is rebuilt only when the particle budget changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [particleCount]);
+
+  useEffect(() => {
+    api.current?.setShape(pattern, customText, customShape);
+  }, [pattern, customText, customShape, particleCount]);
+
+  useEffect(() => {
+    api.current?.setColor(color.color);
+  }, [color, particleCount]);
 
   return (
     <div
       ref={containerRef}
-      className="absolute inset-0 w-full h-full"
-      style={{ background: 'linear-gradient(180deg, #030508 0%, #080c15 100%)' }}
+      className="absolute inset-0 h-full w-full"
+      style={{ background: '#04060b', touchAction: 'none' }}
     />
   );
 }

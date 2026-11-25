@@ -1,341 +1,254 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import * as mpHands from '@mediapipe/hands';
-import { Camera } from '@mediapipe/camera_utils';
+import type { HandGestureState, GestureType } from '@/types/particle';
+import { detectGesture, handOpenness, type Landmark } from '@/lib/gestures';
 
-// Handle MediaPipe's weird bundling in production
-const Hands = (mpHands as any).Hands || mpHands;
-type Hands = mpHands.Hands;
-type Results = mpHands.Results;
-import { HandGestureState, GestureType } from '@/types/particle';
+export type TrackingMode = 'off' | 'camera' | 'demo';
 
-export function useHandTracking() {
+const IS_MOBILE =
+  typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches;
+
+// MediaPipe is served from our own origin (see scripts/copy-mediapipe.mjs).
+const MP_BASE = `${import.meta.env.BASE_URL}mediapipe`;
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+type MpHands = any;
+type MpCamera = any;
+
+const scriptCache = new Map<string, Promise<void>>();
+function loadScript(src: string): Promise<void> {
+  let p = scriptCache.get(src);
+  if (!p) {
+    p = new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = src;
+      s.async = true;
+      s.crossOrigin = 'anonymous';
+      s.onload = () => resolve();
+      s.onerror = () => {
+        scriptCache.delete(src);
+        reject(new Error('Could not load hand tracking. Check your connection.'));
+      };
+      document.head.appendChild(s);
+    });
+    scriptCache.set(src, p);
+  }
+  return p;
+}
+
+/** Procedural hand for demo mode: drifts in a figure-eight and opens/closes. */
+function demoLandmarks(t: number): { lm: Landmark[]; openness: number } {
+  const cx = 0.5 + Math.sin(t * 0.45) * 0.24;
+  const cy = 0.5 + Math.sin(t * 0.9) * 0.14;
+  const openness = 0.5 + Math.sin(t * 0.7) * 0.5;
+  const lm: Landmark[] = [{ x: cx, y: cy + 0.12, z: 0 }];
+  for (let f = 0; f < 5; f++) {
+    const spread = (f - 2) * (0.03 + openness * 0.02);
+    const len = 0.05 + openness * 0.07;
+    for (let j = 1; j <= 4; j++) {
+      lm.push({ x: cx + spread * (j / 2), y: cy + 0.04 - len * (j / 4), z: 0 });
+    }
+  }
+  return { lm, openness };
+}
+
+export function useHandTracking(mode: TrackingMode) {
+  // Per-frame hand data for the renderer: updated every result, never triggers React.
+  const handRef = useRef<{ isDetected: boolean; openness: number; landmarks?: Landmark[] }>({
+    isDetected: false,
+    openness: 0.5,
+  });
+  const smoothRef = useRef<Landmark[] | null>(null);
+  const missRef = useRef(0);
+  const gestureCandRef = useRef<GestureType>('none');
+  const gestureCountRef = useRef(0);
+  const gestureStableRef = useRef<GestureType>('none');
+  const lastEmitRef = useRef({ detected: false, gesture: 'none' as GestureType, openness: -1, t: 0 });
+  const lastSendRef = useRef(0);
+
   const [gestureState, setGestureState] = useState<HandGestureState>({
     isDetected: false,
     openness: 0.5,
     position: null,
     gesture: 'none',
   });
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const handsRef = useRef<Hands | null>(null);
-  const cameraRef = useRef<Camera | null>(null);
-  const isInitializingRef = useRef(false);
+  const handsRef = useRef<MpHands | null>(null);
+  const cameraRef = useRef<MpCamera | null>(null);
+  const runIdRef = useRef(0);
 
-  // Check if finger is extended by comparing tip to PIP joint distance from wrist
-  const isFingerExtended = useCallback((landmarks: any[], tipIdx: number, pipIdx: number, mcpIdx: number) => {
-    const wrist = landmarks[0];
-    const tip = landmarks[tipIdx];
-    const pip = landmarks[pipIdx];
-    const mcp = landmarks[mcpIdx];
-
-    // Distance from tip to wrist
-    const tipToWrist = Math.sqrt(
-      Math.pow(tip.x - wrist.x, 2) +
-      Math.pow(tip.y - wrist.y, 2) +
-      Math.pow(tip.z - wrist.z, 2)
-    );
-
-    // Distance from pip to wrist
-    const pipToWrist = Math.sqrt(
-      Math.pow(pip.x - wrist.x, 2) +
-      Math.pow(pip.y - wrist.y, 2) +
-      Math.pow(pip.z - wrist.z, 2)
-    );
-
-    // Finger is extended if tip is further from wrist than pip
-    return tipToWrist > pipToWrist * 1.1;
+  const emit = useCallback((sm: Landmark[], openness: number, gesture: GestureType) => {
+    const last = lastEmitRef.current;
+    const now = performance.now();
+    if (
+      !last.detected ||
+      last.gesture !== gesture ||
+      (Math.abs(last.openness - openness) > 0.06 && now - last.t > 120)
+    ) {
+      lastEmitRef.current = { detected: true, gesture, openness, t: now };
+      setGestureState({ isDetected: true, openness, position: { x: sm[9].x, y: sm[9].y }, gesture, landmarks: sm });
+    }
   }, []);
 
-  // Thumb extension is different - check horizontal spread
-  const isThumbExtended = useCallback((landmarks: any[]) => {
-    const thumbTip = landmarks[4];
-    const thumbIp = landmarks[3];
-    const indexMcp = landmarks[5];
-    const wrist = landmarks[0];
-
-    // Check if thumb tip is far from index finger base (spread out)
-    const thumbToIndex = Math.abs(thumbTip.x - indexMcp.x);
-    const palmWidth = Math.abs(landmarks[5].x - landmarks[17].x); // index mcp to pinky mcp
-
-    return thumbToIndex > palmWidth * 0.5;
+  const markLost = useCallback(() => {
+    smoothRef.current = null;
+    gestureStableRef.current = 'none';
+    gestureCandRef.current = 'none';
+    gestureCountRef.current = 0;
+    handRef.current = { isDetected: false, openness: handRef.current.openness };
+    lastEmitRef.current = { detected: false, gesture: 'none', openness: -1, t: 0 };
+    setGestureState(prev => ({ ...prev, isDetected: false, position: null, gesture: 'none' }));
   }, []);
 
-  const detectGesture = useCallback((landmarks: any[]): GestureType => {
-    // Check each finger
-    const thumb = isThumbExtended(landmarks);
-    const index = isFingerExtended(landmarks, 8, 6, 5);
-    const middle = isFingerExtended(landmarks, 12, 10, 9);
-    const ring = isFingerExtended(landmarks, 16, 14, 13);
-    const pinky = isFingerExtended(landmarks, 20, 18, 17);
+  const onResults = useCallback((results: { multiHandLandmarks?: Landmark[][] }) => {
+    const raw = results.multiHandLandmarks?.[0];
 
-    const extendedCount = [index, middle, ring, pinky].filter(Boolean).length;
+    if (raw && raw.length >= 21) {
+      missRef.current = 0;
 
-    // Specific landmark positions for more precise checks
-    const thumbTip = landmarks[4];
-    const thumbIp = landmarks[3];
-    const thumbMcp = landmarks[2];
-    const indexTip = landmarks[8];
-    const indexMcp = landmarks[5];
-    const middleTip = landmarks[12];
-    const middleMcp = landmarks[9];
-    const pinkyTip = landmarks[20];
-    const wrist = landmarks[0];
-
-    const thumbIsUp = thumbTip.y < thumbIp.y && thumbTip.y < thumbMcp.y && thumbTip.y < indexMcp.y;
-
-    // Peace sign: index and middle extended, ring and pinky closed
-    // Also check that index and middle are spread apart
-    if (index && middle && !ring && !pinky) {
-      const distance = Math.sqrt(
-        Math.pow(indexTip.x - middleTip.x, 2) +
-        Math.pow(indexTip.y - middleTip.y, 2)
-      );
-      const palmWidth = Math.sqrt(
-        Math.pow(landmarks[5].x - landmarks[17].x, 2) +
-        Math.pow(landmarks[5].y - landmarks[17].y, 2)
-      );
-      
-      if (distance > palmWidth * 0.2) {
-        return 'peace';
+      // Adaptive smoothing: calm when still (kills jitter), fast when moving (kills lag).
+      const prev = smoothRef.current;
+      const sm: Landmark[] = new Array(21);
+      for (let i = 0; i < 21; i++) {
+        const c = raw[i];
+        if (!prev) {
+          sm[i] = { x: c.x, y: c.y, z: c.z };
+        } else {
+          const p = prev[i];
+          const a = Math.min(0.95, 0.35 + Math.hypot(c.x - p.x, c.y - p.y) * 12);
+          sm[i] = { x: p.x + (c.x - p.x) * a, y: p.y + (c.y - p.y) * a, z: p.z + (c.z - p.z) * a };
+        }
       }
-    }
+      smoothRef.current = sm;
 
-    // Thumbs up: only thumb extended and pointing up
-    if (thumbIsUp && !index && !middle && !ring && !pinky) {
-      return 'thumbUp';
-    }
+      const openness = handOpenness(sm);
+      handRef.current = { isDetected: true, openness, landmarks: sm };
 
-    // Pointing: only index extended (thumb can be anything)
-    if (index && !middle && !ring && !pinky) {
-      return 'pointing';
-    }
-
-    // OK Sign: Thumb and Index tips close, others up
-    const thumbIndexDist = Math.sqrt(
-      Math.pow(landmarks[4].x - landmarks[8].x, 2) +
-      Math.pow(landmarks[4].y - landmarks[8].y, 2)
-    );
-    if (thumbIndexDist < 0.05 && middle && ring && pinky) {
-      return 'okSign';
-    }
-
-    // Rock gesture: index and pinky extended, middle and ring closed
-    if (index && !middle && !ring && pinky) {
-      return 'rock';
-    }
-
-    // iLoveYou gesture: thumb, index and pinky extended, others closed
-    if (thumb && index && pinky && !middle && !ring) {
-      return 'iLoveYou';
-    }
-
-    // Call me gesture: thumb and pinky extended, others closed
-    if (thumb && pinky && !index && !middle && !ring) {
-      return 'callMe';
-    }
-
-    // Open hand: 3+ fingers extended
-    if (extendedCount >= 3) {
-      return 'open';
-    }
-
-    // Middle finger gesture: only middle finger extended
-    if (middle && !index && !ring && !pinky && !thumb) {
-      return 'middleFinger';
-    }
-
-    // Fist: all fingers closed
-    if (extendedCount === 0 && !thumb) {
-      return 'fist';
-    }
-
-    return 'none';
-  }, [isFingerExtended, isThumbExtended]);
-
-  const calculateHandOpenness = useCallback((landmarks: any[]) => {
-    const palmCenter = landmarks[0];
-    const fingerTips = [
-      landmarks[4], landmarks[8], landmarks[12], landmarks[16], landmarks[20],
-    ];
-    const fingerBases = [
-      landmarks[2], landmarks[5], landmarks[9], landmarks[13], landmarks[17],
-    ];
-
-    let totalExtension = 0;
-    for (let i = 0; i < 5; i++) {
-      const tipToPalm = Math.sqrt(
-        Math.pow(fingerTips[i].x - palmCenter.x, 2) +
-        Math.pow(fingerTips[i].y - palmCenter.y, 2) +
-        Math.pow(fingerTips[i].z - palmCenter.z, 2)
-      );
-      const baseToPalm = Math.sqrt(
-        Math.pow(fingerBases[i].x - palmCenter.x, 2) +
-        Math.pow(fingerBases[i].y - palmCenter.y, 2) +
-        Math.pow(fingerBases[i].z - palmCenter.z, 2)
-      );
-      totalExtension += tipToPalm / (baseToPalm + 0.001);
-    }
-
-    const avgExtension = totalExtension / 5;
-    return Math.min(1, Math.max(0, (avgExtension - 1.2) / 1.5));
-  }, []);
-
-  const onResults = useCallback((results: Results) => {
-    if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-      const landmarks = results.multiHandLandmarks[0];
-
-      setGestureState({
-        isDetected: true,
-        openness: calculateHandOpenness(landmarks),
-        position: { x: landmarks[9].x, y: landmarks[9].y },
-        gesture: detectGesture(landmarks),
-        landmarks: landmarks.map(l => ({ x: l.x, y: l.y, z: l.z })),
-      });
+      // A gesture must hold for 3 frames before it switches (no flicker).
+      const g = detectGesture(sm);
+      if (g === gestureCandRef.current) gestureCountRef.current++;
+      else {
+        gestureCandRef.current = g;
+        gestureCountRef.current = 1;
+      }
+      if (gestureCountRef.current >= 3) gestureStableRef.current = g;
+      emit(sm, openness, gestureStableRef.current);
     } else {
-      setGestureState(prev => ({
-        ...prev,
-        isDetected: false,
-        position: null,
-        gesture: 'none',
-      }));
+      // Tolerate a few dropped frames before declaring the hand lost.
+      missRef.current++;
+      if (missRef.current >= 5 && handRef.current.isDetected) markLost();
     }
-  }, [calculateHandOpenness, detectGesture]);
+  }, [emit, markLost]);
 
   const cleanup = useCallback(() => {
-    console.log('Cleaning up hand tracking...');
-    if (cameraRef.current) {
-      try {
-        cameraRef.current.stop();
-      } catch (e) {
-        console.error('Error stopping camera:', e);
-      }
-      cameraRef.current = null;
-    }
-    if (handsRef.current) {
-      try {
-        handsRef.current.close();
-      } catch (e) {
-        console.error('Error closing hands:', e);
-      }
-      handsRef.current = null;
-    }
-    if (videoRef.current) {
-      try {
-        videoRef.current.pause();
-        videoRef.current.srcObject = null;
-        videoRef.current.remove();
-      } catch (e) {
-        console.error('Error removing video element:', e);
-      }
+    runIdRef.current++;
+    try { cameraRef.current?.stop(); } catch { /* already stopped */ }
+    cameraRef.current = null;
+    try { handsRef.current?.close(); } catch { /* already closed */ }
+    handsRef.current = null;
+    const v = videoRef.current;
+    if (v) {
+      const stream = v.srcObject as MediaStream | null;
+      stream?.getTracks().forEach(t => t.stop());
+      v.pause();
+      v.srcObject = null;
+      v.remove();
       videoRef.current = null;
     }
   }, []);
 
-  const initializeHandTracking = useCallback(async () => {
-    if (isInitializingRef.current) {
-      console.log('Already initializing, skipping...');
-      return;
-    }
+  const startCamera = useCallback(async () => {
+    cleanup();
+    const runId = runIdRef.current;
+    setIsLoading(true);
+    setError(null);
 
     try {
-      isInitializingRef.current = true;
-      setIsLoading(true);
-      setError(null);
+      await Promise.all([
+        loadScript(`${MP_BASE}/hands/hands.js`),
+        loadScript(`${MP_BASE}/camera_utils/camera_utils.js`),
+      ]);
+      if (runId !== runIdRef.current) return;
 
-      // Ensure cleanup of any existing resources
-      cleanup();
+      const w = window as any;
+      const hands: MpHands = new w.Hands({ locateFile: (file: string) => `${MP_BASE}/hands/${file}` });
+      hands.setOptions({
+        maxNumHands: 1,
+        modelComplexity: IS_MOBILE ? 0 : 1,
+        minDetectionConfidence: 0.6,
+        minTrackingConfidence: 0.6,
+        selfieMode: true,
+      });
+      hands.onResults(onResults);
+      handsRef.current = hands;
 
       const video = document.createElement('video');
       video.setAttribute('playsinline', '');
-      video.setAttribute('autoplay', '');
-      video.setAttribute('muted', '');
+      video.muted = true;
       video.style.display = 'none';
       document.body.appendChild(video);
       videoRef.current = video;
 
-      // Use global MediaPipe objects if available (from CDN in index.html)
-      let HandsConstructor = (window as any).Hands || (mpHands as any).Hands || (mpHands as any).default?.Hands || (mpHands as any).default;
-
-      if (typeof HandsConstructor !== 'function' && HandsConstructor?.Hands) {
-        HandsConstructor = HandsConstructor.Hands;
-      }
-
-      console.log('HandsConstructor type:', typeof HandsConstructor);
-
-      if (typeof HandsConstructor !== 'function') {
-        throw new Error('Hands constructor not found');
-      }
-
-      const hands = new HandsConstructor({
-        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
-      });
-
-      hands.setOptions({
-        maxNumHands: 1,
-        modelComplexity: 1,
-        minDetectionConfidence: 0.7,
-        minTrackingConfidence: 0.7,
-        selfieMode: true,
-      });
-
-      hands.onResults(onResults);
-      handsRef.current = hands;
-
-      // Use global Camera constructor from CDN
-      let CameraConstructor = (window as any).Camera || (mpHands as any).Camera || (mpHands as any).default?.Camera || Camera;
-
-      if (typeof CameraConstructor !== 'function' && (CameraConstructor as any).Camera) {
-        CameraConstructor = (CameraConstructor as any).Camera;
-      }
-
-      console.log('CameraConstructor type:', typeof CameraConstructor);
-
-      if (typeof CameraConstructor !== 'function') {
-        throw new Error('Camera constructor not found');
-      }
-
-      const camera = new CameraConstructor(video, {
+      const camera: MpCamera = new w.Camera(video, {
         onFrame: async () => {
-          if (handsRef.current && videoRef.current) {
-            await handsRef.current.send({ image: videoRef.current });
-          }
+          if (document.hidden || !handsRef.current || !videoRef.current) return;
+          // Phones: cap inference at ~24fps to save battery and heat.
+          const now = performance.now();
+          if (IS_MOBILE && now - lastSendRef.current < 41) return;
+          lastSendRef.current = now;
+          await handsRef.current.send({ image: videoRef.current });
         },
-        width: 640,
-        height: 480,
+        facingMode: 'user',
+        width: IS_MOBILE ? 480 : 640,
+        height: IS_MOBILE ? 360 : 480,
       });
-
       cameraRef.current = camera;
-
-      // Small delay to ensure previous camera instances are fully released
-      await new Promise(resolve => setTimeout(resolve, 800));
       await camera.start();
-
-      setIsLoading(false);
+      if (runId === runIdRef.current) setIsLoading(false);
     } catch (err) {
-      console.error('Hand tracking initialization error:', err);
-      let message = 'Failed to initialize camera.';
-      if (err instanceof Error) {
-        if (err.name === 'NotReadableError' || err.message.includes('NotReadableError')) {
-          message = 'Camera is already in use by another application.';
-        } else if (err.name === 'NotAllowedError' || err.message.includes('NotAllowedError')) {
-          message = 'Camera access denied. Please allow camera access.';
-        } else {
-          message = err.message;
-        }
-      }
+      if (runId !== runIdRef.current) return;
+      const e = err as Error;
+      let message = 'Could not start the camera.';
+      if (e?.name === 'NotReadableError') message = 'Camera is already in use by another app.';
+      else if (e?.name === 'NotAllowedError') message = 'Camera access was denied. Allow it in your browser settings.';
+      else if (e?.name === 'NotFoundError') message = 'No camera found on this device.';
+      else if (e?.message) message = e.message;
       setError(message);
       setIsLoading(false);
-    } finally {
-      isInitializingRef.current = false;
     }
-  }, [onResults, cleanup]);
+  }, [cleanup, onResults]);
 
   useEffect(() => {
-    initializeHandTracking();
-    return cleanup;
-  }, [initializeHandTracking, cleanup]);
+    if (mode === 'camera') {
+      void startCamera();
+      return cleanup;
+    }
 
-  return { gestureState, isLoading, error, restart: initializeHandTracking };
+    cleanup();
+    setIsLoading(false);
+    setError(null);
+
+    if (mode === 'demo') {
+      let raf = 0;
+      const t0 = performance.now();
+      const tick = (now: number) => {
+        raf = requestAnimationFrame(tick);
+        const { lm, openness } = demoLandmarks((now - t0) / 1000);
+        handRef.current = { isDetected: true, openness, landmarks: lm };
+        emit(lm, openness, 'open');
+      };
+      raf = requestAnimationFrame(tick);
+      return () => {
+        cancelAnimationFrame(raf);
+        markLost();
+      };
+    }
+
+    markLost();
+    return undefined;
+  }, [mode, startCamera, cleanup, emit, markLost]);
+
+  return { gestureState, handRef, videoRef, isLoading, error, restart: startCamera };
 }
